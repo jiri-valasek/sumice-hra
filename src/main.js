@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { Terrain, paintGround, buildRoads, buildBuildings, buildTrees, buildLabels, Colliders, nearestRoadPoint, SURF } from './world.js';
+import { Terrain, paintGround, buildRoads, buildBuildings, buildTrees, buildLabels, Colliders, nearestRoadPoint, SURF,
+  Bridges, buildBridgeMeshes, buildWater, buildRails } from './world.js';
+import { Train } from './train.js';
 import { Vehicle, VEHICLES } from './vehicles.js';
 import { Input } from './input.js';
 import { Sound } from './audio.js';
@@ -67,6 +69,18 @@ async function load() {
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   scene.add(world.terrain.mesh(tex));
   buildRoads(map, world.terrain).forEach((m) => scene.add(m));
+  world.bridges = new Bridges(map);
+  world.ground = (x, z, yPrev) => {
+    const t = world.terrain.height(x, z);
+    const d = world.bridges.deck(x, z);
+    // na most se dostaneš jen zhora – pod mostem jedeš potokem
+    if (d > t && (yPrev === undefined || yPrev > d - 1.4)) return { h: d, bridge: true };
+    return { h: t, bridge: false };
+  };
+  scene.add(buildBridgeMeshes(map));
+  world.water = buildWater(map);
+  scene.add(world.water);
+  buildRails(map).forEach((m) => scene.add(m));
 
   status('Stavím domy…'); await nextFrame();
   const b = buildBuildings(map);
@@ -76,6 +90,8 @@ async function load() {
   const t = buildTrees(map, world.terrain);
   t.meshes.forEach((m) => scene.add(m));
   world.colliders = new Colliders(b.colliders, t.colliders);
+  world.train = new Train(map, scene, world.colliders, map.pois.find((p) => p.k === 'halt'));
+  world.train.onHorn = (d) => sound.trainHorn(d);
 
   labels = buildLabels(map, world.terrain);
   scene.add(labels.group);
@@ -160,6 +176,39 @@ function updateSmoke(dt, v, throttle) {
   }
 }
 
+// ------------------------------------------------------------ šplouchání ve vodě
+const drops = [];
+const dropGeo = new THREE.IcosahedronGeometry(0.06, 0);
+const dropMat = new THREE.MeshBasicMaterial({ color: '#e6f6ff', transparent: true, opacity: 0.85 });
+for (let i = 0; i < 80; i++) { const m = new THREE.Mesh(dropGeo, dropMat); m.visible = false; scene.add(m); drops.push({ m, v: new THREE.Vector3(), life: 0 }); }
+let dropIdx = 0, splashT = 0, wasWet = false;
+function updateSplash(dt, v) {
+  const wet = v.surface === SURF.WATER && !v.onBridge && v.air < 0.1;
+  if (wet && !wasWet && Math.abs(v.speed) > 3) { sound.splash(Math.min(1, Math.abs(v.speed) / 12)); burst(v, 25); toast('💦 Šplouch!'); }
+  wasWet = wet;
+  if (wet && Math.abs(v.speed) > 1.5) {
+    splashT -= dt;
+    if (splashT <= 0) { splashT = 0.05; burst(v, 3); }
+  }
+  for (const d of drops) {
+    if (d.life <= 0) continue;
+    d.life -= dt;
+    d.v.y -= 12 * dt;
+    d.m.position.addScaledVector(d.v, dt);
+    if (d.life <= 0) d.m.visible = false;
+  }
+}
+function burst(v, n) {
+  const sp = Math.abs(v.speed);
+  for (let i = 0; i < n; i++) {
+    const d = drops[dropIdx++ % drops.length];
+    const a = Math.random() * Math.PI * 2;
+    d.m.position.set(v.pos.x + Math.cos(a) * 0.8, v.y + 0.3, v.pos.z + Math.sin(a) * 0.8);
+    d.v.set(Math.cos(a) * (1 + Math.random() * 2) + v.vx * 0.3, 3 + Math.random() * 3 + sp * 0.15, Math.sin(a) * (1 + Math.random() * 2) + v.vz * 0.3);
+    d.life = 0.9; d.m.visible = true;
+  }
+}
+
 // ------------------------------------------------------------ hra
 const input = new Input();
 const sound = new Sound();
@@ -200,18 +249,26 @@ function placeName(v) {
     if (d < bd) { bd = d; best = p; }
   }
   if (best) return best.text;
+  if (v.onBridge) return '🌉 Na mostě';
+  if (v.air > 0.25) return '🚀 Letím!';
   const s = { [SURF.FIELD]: '🌾 Na poli', [SURF.WATER]: '💦 Ve vodě!', [SURF.GRASS]: '🌿 Na louce', [SURF.DIRT]: '🟫 Na polňačce' }[v.surface];
   return s || '🏡 Šumice';
 }
 
 let last = performance.now();
 let hudTimer = 0;
+let paused = false;
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  const inp = input.state();
+  if (!paused) tick(dt, input.state());
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
 
-  if (input.take('switch')) useVehicle(active.kind === 'kart' ? 'tractor' : 'kart');
+function tick(dt, inp) {
+
+  if (input.take('switch')) useVehicle({ kart: 'moto', moto: 'tractor', tractor: 'kart' }[active.kind]);
   if (input.take('camera')) { camMode = (camMode + 1) % CAM_MODES.length; toast('🎥 ' + CAM_MODES[camMode]); }
   if (input.take('reset')) resetToRoad();
   if (input.take('horn')) sound.horn(active.kind === 'tractor');
@@ -222,6 +279,10 @@ function loop(now) {
   const steps = 2;
   for (let i = 0; i < steps; i++) active.update(dt / steps, inp);
   if (active.bump > 0.3) { sound.bump(active.bump); active.bump = 0.29; }
+  if (active.landed > 0) { sound.bump(active.landed); active.landed = 0; }
+  world.train.update(dt, active);
+  if (world.water.userData.flow) world.water.userData.flow.offset.y -= dt * 0.35;
+  updateSplash(dt, active);
   sound.setEngine(active.p.engine, active.speed / active.p.maxSpeed, inp.throttle !== 0);
   updateSmoke(dt, active, inp.throttle > 0);
 
@@ -263,9 +324,6 @@ function loop(now) {
     $('#place').textContent = placeName(active);
     drawMinimap(active);
   }
-
-  renderer.render(scene, camera);
-  requestAnimationFrame(loop);
 }
 
 let toastT;
@@ -287,6 +345,20 @@ load().then(() => {
   camLook.set(sp.x, active.y, sp.z);
   renderer.render(scene, camera);
   requestAnimationFrame((t) => { last = t; loop(t); });
+  // ladění: ?debug zpřístupní hru v konzoli (window.game)
+  if (location.search.includes('debug')) {
+    window.game = {
+      world, map, camera, get active() { return active; }, useVehicle,
+      // posune simulaci o `sec` sekund s daným ovládáním (pro testy)
+      sim(sec, inp = {}) {
+        paused = true;
+        const i = { throttle: 0, steer: 0, handbrake: false, ...inp };
+        for (let t = 0; t < sec; t += 1 / 30) tick(1 / 30, i);
+        hudTimer = 0; tick(0.0001, i);
+        renderer.render(scene, camera);
+      },
+    };
+  }
 }).catch((e) => {
   console.error(e);
   status('Něco se pokazilo: ' + e.message);

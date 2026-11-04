@@ -72,6 +72,36 @@ export class Sound {
     src.start(t);
   }
 
+  splash(strength) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.6, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.15));
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 0.7;
+    const g = ctx.createGain(); g.gain.value = 0.6 * strength;
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t);
+  }
+
+  trainHorn(dist) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const vol = Math.max(0.03, Math.min(0.3, 30 / (dist + 20)));
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.05);
+    g.gain.setValueAtTime(vol, t + 1.1);
+    g.gain.linearRampToValueAtTime(0, t + 1.4);
+    g.connect(this.master);
+    for (const f of [311, 370]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+      o.connect(lp).connect(g); o.start(t); o.stop(t + 1.5);
+    }
+  }
+
   toggleMute() {
     this.muted = !this.muted;
     return this.muted;

@@ -1,7 +1,7 @@
 # Šumice 🚜🏎️
 
-Projížďka po Šumicích (okres Uherské Hradiště) na motokáře nebo traktoru, v prohlížeči.
-Vesnice je postavená ze skutečných mapových dat: silnice, domy, pole, sady, lesy, potoky i kopce sedí s realitou.
+Projížďka po Šumicích (okres Uherské Hradiště) na motokáře, krossce nebo traktoru, v prohlížeči.
+Vesnice je postavená ze skutečných mapových dat: silnice, mosty, domy, pole, sady, lesy, potoky, železnice i kopce sedí s realitou. Po trati jezdí vláček a staví na zastávce Šumice.
 
 ## Hraní
 
@@ -11,7 +11,7 @@ Stačí otevřít `index.html` přes webový server (nebo GitHub Pages). Nic se 
 |---|---|---|
 | Jízda | šipky nebo WASD | ◀ ▶ vlevo, ⏫ ⏬ vpravo |
 | Smyk (ruční brzda) | mezerník | – |
-| Přesednout (motokára ↔ traktor) | T | 🔄 |
+| Přesednout (motokára → krosska → traktor) | T | 🔄 |
 | Houkačka | H | 📯 |
 | Kamera (za vozidlem / zdálky / shora) | C | 🎥 |
 | Zpátky na cestu | R | 📍 |
@@ -43,7 +43,8 @@ Výřez mapy (souřadnice) se nastavuje na začátku skriptu.
 
 - `index.html`: stránka, HUD, menu a dotyková tlačítka
 - `src/world.js`: terén, malovaný povrch, silnice, budovy, stromy, popisky a kolize
-- `src/vehicles.js`: modely vozidel a jízdní fyzika
+- `src/vehicles.js`: modely vozidel a jízdní fyzika (včetně skoků)
+- `src/train.js`: vláček na trati
 - `src/input.js`: klávesnice a dotyk
 - `src/audio.js`: syntetizovaný zvuk motoru a houkačka
 - `src/main.js`: hlavní smyčka, kamera a minimapa

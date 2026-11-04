@@ -129,6 +129,39 @@ function tractorModel() {
   return { group: g, wheels, exhaustTop: new THREE.Vector3(0.35, 2.85, 1.3) };
 }
 
+function motoModel() {
+  const g = new THREE.Group();
+  const orange = mat('#f07a1a'), dark = mat('#26282c'), tire = mat('#1a1a1a'), rim = mat('#c9c9c9'), white = mat('#f4f4f4');
+  const tilt = new THREE.Group(); // náklon v zatáčce
+  g.add(tilt);
+  const wheels = [];
+  for (const [z, front] of [[0.72, 1], [-0.72, 0]]) {
+    const wh = wheel(0.36, 0.14, tire, rim, 0.6);
+    wh.position.set(0, 0.36, z);
+    wh.userData = { r: 0.36, front };
+    tilt.add(wh);
+    wheels.push(wh);
+  }
+  tilt.add(box(0.2, 0.25, 1.1, dark, 0, 0.62, -0.05));        // rám + motor
+  tilt.add(box(0.32, 0.28, 0.45, mat('#555'), 0, 0.5, 0.0));
+  tilt.add(box(0.34, 0.22, 0.5, orange, 0, 0.88, 0.22));      // nádrž
+  tilt.add(box(0.26, 0.1, 0.7, dark, 0, 0.9, -0.3));         // sedlo
+  tilt.add(box(0.3, 0.06, 0.55, orange, 0, 0.85, -0.68));    // zadní blatník
+  tilt.add(box(0.26, 0.05, 0.4, white, 0, 0.78, 0.82));      // přední blatník
+  const fork = box(0.08, 0.6, 0.08, mat('#bbb'), 0, 0.62, 0.66); fork.rotation.x = -0.35; tilt.add(fork);
+  tilt.add(box(0.75, 0.05, 0.05, dark, 0, 1.05, 0.52));      // řídítka
+  tilt.add(box(0.26, 0.2, 0.06, white, 0, 0.98, 0.72));      // tabulka s číslem
+  const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.6, 8), mat('#888'));
+  exhaust.rotation.x = Math.PI / 2 - 0.3; exhaust.position.set(0.17, 0.7, -0.45); tilt.add(exhaust);
+  const rider = person('#1f8a4c', '#e8392b');
+  rider.position.set(0, 0.85, -0.15);
+  rider.rotation.x = 0.35;
+  tilt.add(rider);
+  // ruce
+  for (const x of [-0.25, 0.25]) { const a = box(0.08, 0.08, 0.5, mat('#1f8a4c'), x, 1.15, 0.25); a.rotation.x = 0.5; tilt.add(a); }
+  return { group: g, wheels, tilt };
+}
+
 // ------------------------------------------------------------ fyzika
 export const VEHICLES = {
   kart: {
@@ -137,6 +170,14 @@ export const VEHICLES = {
     steerMax: 0.55, steerRate: 4, maxYaw: 2.4,
     surf: { [SURF.PAVED]: 1, [SURF.DIRT]: 0.85, [SURF.GRASS]: 0.6, [SURF.FIELD]: 0.45, [SURF.WATER]: 0.3 },
     cam: { dist: 6, height: 2.6, look: 1.0 }, engine: { base: 70, range: 160, type: 'sawtooth' },
+  },
+  moto: {
+    name: 'Krosska', model: motoModel, radius: 0.7, wheelbase: 1.45,
+    maxSpeed: 27, reverse: 3, accel: 11, brake: 16, drag: 0.2, grip: 7, driftGrip: 1.6,
+    steerMax: 0.5, steerRate: 5, maxYaw: 2.6,
+    surf: { [SURF.PAVED]: 1, [SURF.DIRT]: 0.95, [SURF.GRASS]: 0.85, [SURF.FIELD]: 0.75, [SURF.WATER]: 0.4 },
+    cam: { dist: 5.5, height: 2.4, look: 1.2 }, engine: { base: 95, range: 260, type: 'sawtooth' },
+    lean: true, springy: 1.2,
   },
   tractor: {
     name: 'Traktor', model: tractorModel, radius: 1.7, wheelbase: 2.2,
@@ -158,6 +199,11 @@ export class Vehicle {
     this.group = m.group;
     this.wheels = m.wheels;
     this.exhaustTop = m.exhaustTop;
+    this.tilt = m.tilt || null;
+    this.vy = 0;
+    this.air = 0;      // jak dlouho je ve vzduchu
+    this.onBridge = false;
+    this.landed = 0;   // síla dopadu (pro zvuk)
     this.pos = { x: 0, z: 0 };
     this.y = 0;
     this.heading = 0;
@@ -173,7 +219,8 @@ export class Vehicle {
   place(x, z, heading) {
     this.pos.x = x; this.pos.z = z; this.heading = heading;
     this.vx = this.vz = 0; this.speed = 0; this.steer = 0;
-    this.y = this.world.terrain.height(x, z);
+    this.y = this.world.ground(x, z).h;
+    this.vy = 0; this.air = 0; this.lastGround = this.y; this.onBridge = false;
     this.up.set(0, 1, 0);
     this.updateVisual(0);
   }
@@ -186,12 +233,13 @@ export class Vehicle {
     let fwd = this.vx * fx + this.vz * fz;
     let lat = this.vx * rx + this.vz * rz;
 
-    this.surface = this.world.surface(this.pos.x, this.pos.z);
+    this.surface = this.onBridge ? SURF.PAVED : this.world.surface(this.pos.x, this.pos.z);
     const sf = P.surf[this.surface] ?? 0.7;
+    const flying = this.air > 0.08;
     const vmax = P.maxSpeed * sf;
 
     // plyn / brzda / couvání
-    if (input.throttle > 0) {
+    if (flying) { /* ve vzduchu kola nezaberou */ } else if (input.throttle > 0) {
       if (fwd < -0.5) fwd += P.brake * dt;
       else if (fwd < vmax) fwd += P.accel * input.throttle * dt * (1 - Math.max(0, fwd) / (vmax * 1.05));
     } else if (input.throttle < 0) {
@@ -204,21 +252,24 @@ export class Vehicle {
     if (fwd > vmax) fwd -= (fwd - vmax) * 2 * dt;
 
     // svah
-    const ahead = T.height(this.pos.x + fx * 1.5, this.pos.z + fz * 1.5);
-    const behind = T.height(this.pos.x - fx * 1.5, this.pos.z - fz * 1.5);
-    const slope = (ahead - behind) / 3;
-    fwd -= 9.81 * slope * dt * 0.75;
+    if (!flying) {
+      const G = this.world.ground;
+      const ahead = G(this.pos.x + fx * 1.5, this.pos.z + fz * 1.5, this.y).h;
+      const behind = G(this.pos.x - fx * 1.5, this.pos.z - fz * 1.5, this.y).h;
+      const slope = (ahead - behind) / 3;
+      fwd -= 9.81 * slope * dt * 0.75;
+    }
 
     // zatáčení (citlivost klesá s rychlostí)
     const target = input.steer * P.steerMax * (1 / (1 + Math.abs(fwd) * 0.04));
     this.steer += (target - this.steer) * Math.min(1, P.steerRate * dt);
     let yaw = (fwd / P.wheelbase) * Math.tan(this.steer);
     yaw = Math.max(-P.maxYaw, Math.min(P.maxYaw, yaw));
-    this.heading += yaw * dt;
+    this.heading += yaw * dt * (flying ? 0.3 : 1);
 
     // boční přilnavost (ruční brzda = smyk)
     const grip = input.handbrake ? P.driftGrip : P.grip * (this.surface === SURF.PAVED ? 1 : 0.8);
-    lat *= Math.exp(-grip * dt);
+    if (!flying) lat *= Math.exp(-grip * dt);
     if (input.handbrake) fwd *= Math.exp(-0.6 * dt);
 
     const nfx = Math.sin(this.heading), nfz = Math.cos(this.heading);
@@ -239,6 +290,11 @@ export class Vehicle {
         this.vx *= 0.75; this.vz *= 0.75;
         if (vn < -3) this.bump = Math.min(1, -vn / 12);
       }
+      if (hit.dynamic) { // vlak tě odstrčí
+        this.vx += hit.x * 4 + (hit.dynamic.vx || 0) * 0.5;
+        this.vz += hit.z * 4 + (hit.dynamic.vz || 0) * 0.5;
+        this.bump = Math.max(this.bump, 0.6);
+      }
     }
     // hranice mapy
     const hw = T.W / 2 - 15, hh = T.H / 2 - 15;
@@ -246,14 +302,32 @@ export class Vehicle {
     if (Math.abs(this.pos.z) > hh) { this.pos.z = Math.sign(this.pos.z) * hh; this.vz *= -0.3; }
 
     this.speed = this.vx * nfx + this.vz * nfz;
+
+    // svislý pohyb: skoky přes hrany, dopady
+    const g = this.world.ground(this.pos.x, this.pos.z, this.y);
+    this.onBridge = g.bridge;
+    this.vy -= 22 * dt;
+    this.y += this.vy * dt;
+    if (this.y <= g.h) {
+      const groundRate = (g.h - this.lastGround) / Math.max(dt, 1e-4);
+      if (this.air > 0.25 && this.vy < -5) this.landed = Math.min(1, -this.vy / 14);
+      this.y = g.h;
+      // výjezd z rampy -> rychlost nahoru (omezená, ať to nevystřelí na Měsíc)
+      this.vy = Math.min(Math.max(groundRate, 0), 9 * (P.springy || 0.7));
+      this.air = 0;
+    } else if (this.y - g.h > 0.05) {
+      this.air += dt;
+    }
+    this.lastGround = g.h;
     this.updateVisual(dt);
   }
 
   updateVisual(dt) {
     const T = this.world.terrain;
-    const targetY = T.height(this.pos.x, this.pos.z);
-    this.y = targetY;
-    T.normal(this.pos.x, this.pos.z, tmpN);
+    if (this.lastGround === undefined) this.lastGround = this.y;
+    if (this.onBridge) tmpN.set(0, 1, 0);
+    else if (this.air > 0.08) tmpN.copy(this.up);
+    else T.normal(this.pos.x, this.pos.z, tmpN);
     // vyhlazení náklonu
     this.up.lerp(tmpN, dt ? Math.min(1, dt * 10) : 1).normalize();
     tmpF.set(Math.sin(this.heading), 0, Math.cos(this.heading));
@@ -266,6 +340,11 @@ export class Vehicle {
     this.group.position.set(this.pos.x, this.y + shake, this.pos.z);
 
     this.wheelSpin += (this.speed * dt);
+    if (this.tilt) {
+      // motorka se v zatáčce naklání
+      const lean = this.air > 0.08 ? 0 : -this.steer * Math.min(1, Math.abs(this.speed) / 10) * 1.1;
+      this.tilt.rotation.z += (lean - this.tilt.rotation.z) * Math.min(1, (dt || 0) * 8);
+    }
     for (const w of this.wheels) {
       w.rotation.x = this.wheelSpin / w.userData.r;
       w.rotation.y = w.userData.front ? this.steer : 0;

@@ -139,24 +139,100 @@ def densify(p, step):
 FOOT = ("footway", "path", "steps", "cycleway")
 
 
-def road_profiles(roads, dem, hmin):
+def moving_avg(hs, win):
+    if len(hs) <= 2 or win < 1:
+        return hs
+    k = np.ones(2 * win + 1)
+    return np.convolve(np.pad(hs, win, mode="edge"), k, "valid") / k.sum()
+
+
+def bridge_profile(pts, dem, hmin, water_h=None):
+    """Mostovka: rovně mezi opěrami, vždy nad vodou."""
+    h0 = sample_height(dem, hmin, *pts[0])
+    h1 = sample_height(dem, hmin, *pts[-1])
+    n = len(pts)
+    hs = np.array([h0 + (h1 - h0) * i / max(1, n - 1) for i in range(n)])
+    if water_h is not None:
+        lo = min(water_h(x, z) for x, z in pts) + 1.6
+        if hs.min() < lo:
+            hs += lo - hs.min()
+    return hs
+
+
+def road_profiles(roads, rails, dem, hmin, water_h):
     """Plynulý výškový profil podél každé cesty (bez náklonu do stran)."""
     for r in roads:
         pts = densify(r["p"], 3.0)
         r["p"] = [[round(x, 1), round(z, 1)] for x, z in pts]
-        if r["t"] in FOOT:
+        if r["t"] in FOOT and not r.get("b"):
             continue
-        hs = np.array([sample_height(dem, hmin, x, z) for x, z in pts])
-        # klouzavý průměr ~ 24 m silnice, 15 m polní cesty
-        win = 8 if r["s"] else 5
-        if len(hs) > 2:
-            k = np.ones(2 * win + 1)
-            pad = np.pad(hs, win, mode="edge")
-            hs = np.convolve(pad, k, "valid") / k.sum()
+        if r.get("b"):
+            hs = bridge_profile(pts, dem, hmin, water_h)
+        else:
+            hs = np.array([sample_height(dem, hmin, x, z) for x, z in pts])
+            # klouzavý průměr ~ 24 m silnice, 15 m polní cesty
+            hs = moving_avg(hs, 8 if r["s"] else 5)
         r["h"] = [round(float(v), 2) for v in hs]
+    for r in rails:
+        pts = densify(r["p"], 3.0)
+        r["p"] = [[round(x, 1), round(z, 1)] for x, z in pts]
+        if r["b"]:
+            hs = bridge_profile(pts, dem, hmin, water_h)
+        else:
+            hs = moving_avg(np.array([sample_height(dem, hmin, x, z) for x, z in pts]), 12)
+        r["h"] = [round(float(v), 2) for v in hs]
+        r.pop("ends", None)
 
 
-def flatten(dem, hmin, roads, buildings):
+def carve_water(dem, hmin, water):
+    """Vyhloubí koryta řek a potoků a spočítá hladinu."""
+    xs, zs = grid_xz(dem)
+    res = xs[1] - xs[0]
+    out = dem.copy()
+    # jen části toků uvnitř mapy
+    water[:] = [w for w in water if any(in_bounds(x, z, 30) for x, z in w["p"])]
+    for wl in water:
+        pts = [q for q in densify(wl["p"], 2.5) if in_bounds(q[0], q[1], 30)]
+        if len(pts) < 2:
+            wl["p"] = []; wl["h"] = []
+            continue
+        wl["p"] = [[round(x, 1), round(z, 1)] for x, z in pts]
+        bed = np.array([sample_height(dem, hmin, x, z) for x, z in pts])
+        # dno nesmí stoupat proti proudu "zubatě": zahladit
+        bed = moving_avg(bed, 3) - wl["d"]
+        wl["h"] = [round(float(b + wl["d"] * 0.45), 2) for b in bed]
+        if wl.get("u"):
+            continue
+        core, blend = wl["w"] / 2, 2.5 + wl["w"] * 0.3
+        for (x, z), b in zip(pts, bed):
+            R = core + blend
+            i0 = max(0, int((x - R - xs[0]) / res)); i1 = min(len(xs) - 1, int((x + R - xs[0]) / res) + 1)
+            j0 = max(0, int((z - R - zs[0]) / res)); j1 = min(len(zs) - 1, int((z + R - zs[0]) / res) + 1)
+            if i1 < i0 or j1 < j0:
+                continue
+            gx, gz = np.meshgrid(xs[i0:i1 + 1], zs[j0:j1 + 1])
+            wgt = smoothstep(core, R, np.hypot(gx - x, gz - z))
+            sl = (slice(j0, j1 + 1), slice(i0, i1 + 1))
+            target = b + hmin
+            out[sl] = np.where(out[sl] > target, out[sl] * (1 - wgt) + target * wgt, out[sl])
+    return out
+
+
+def water_sampler(water):
+    """Výška hladiny nejbližšího toku (pro mosty)."""
+    P = [(x, z, h) for wl in water for (x, z), h in zip(wl["p"], wl["h"])]
+    arr = np.array(P) if P else np.zeros((0, 3))
+
+    def f(x, z):
+        if not len(arr):
+            return -1e9
+        d = (arr[:, 0] - x) ** 2 + (arr[:, 1] - z) ** 2
+        i = int(np.argmin(d))
+        return arr[i, 2] if d[i] < 40 ** 2 else -1e9
+    return f
+
+
+def flatten(dem, hmin, roads, buildings, rails=()):
     xs, zs = grid_xz(dem)
     res = xs[1] - xs[0]
     out = dem.copy()
@@ -189,13 +265,19 @@ def flatten(dem, hmin, roads, buildings):
 
     # 2) koridory silnic (přebijí plošiny domů)
     num = np.zeros_like(dem); den = np.zeros_like(dem); wmax = np.zeros_like(dem)
-    for r in roads:
-        if "h" not in r:
-            continue
+    bridge_ends = [pt for r in list(roads) + list(rails) if r.get("b") for pt in (r["p"][0], r["p"][-1])]
+
+    def near_bridge(x, z):
+        return any((x - bx) ** 2 + (z - bz) ** 2 < 14 ** 2 for bx, bz in bridge_ends)
+
+    for r in list(roads) + [dict(rr, w=4.0, s=1) for rr in rails]:
+        if "h" not in r or r.get("b"):
+            continue  # pod mostem terén nesrovnáváme – teče tam voda
         core = r["w"] / 2 + 1.5
         blend = 7.0 if r["s"] else 5.0
         for (x, z), h in zip(r["p"], r["h"]):
-            splat(num, den, wmax, x, z, h + hmin, core, blend)
+            nb = near_bridge(x, z)
+            splat(num, den, wmax, x, z, h + hmin, core * (0.6 if nb else 1), 1.0 if nb else blend)
     m = den > 0
     out[m] = out[m] * (1 - wmax[m]) + (num[m] / den[m]) * wmax[m]
     return out
@@ -340,7 +422,7 @@ def build_osm(refresh, dem, hmin):
     def pts(refs):
         return [list(nodes[r]) for r in refs]
 
-    roads, buildings, areas, water_lines, pois, trees = [], [], [], [], [], []
+    roads, buildings, areas, water_lines, pois, trees, rails = [], [], [], [], [], [], []
     rnd = random.Random(42)
 
     def add_poi(t, x, z):
@@ -370,13 +452,25 @@ def build_osm(refresh, dem, hmin):
             paved = hw not in ("track", "path", "footway") or surf in ("asphalt", "paved", "concrete", "paving_stones")
             if surf in ("unpaved", "gravel", "dirt", "ground", "grass", "compacted", "fine_gravel"):
                 paved = False
-            roads.append({"t": hw, "w": width, "s": 1 if paved else 0, "p": p})
+            road = {"t": hw, "w": width, "s": 1 if paved else 0, "p": p}
+            if t.get("bridge") and t["bridge"] != "no":
+                road["b"] = 1
+            roads.append(road)
+            continue
+
+        if t.get("railway") == "rail":
+            rails.append({"p": p, "b": 1 if t.get("bridge") not in (None, "no") else 0,
+                          "ends": (refs[0], refs[-1])})
             continue
 
         if "waterway" in t and not closed:
             ww = t["waterway"]
             width = {"river": 7, "stream": 2, "ditch": 1, "drain": 1, "canal": 4}.get(ww, 1.5)
-            water_lines.append({"w": width, "p": p})
+            depth = {"river": 1.4, "stream": 0.8, "canal": 1.2}.get(ww, 0.4)
+            wl = {"w": width, "d": depth, "p": p}
+            if t.get("tunnel") or t.get("culvert") or t.get("location") == "underground":
+                wl["u"] = 1  # propustek – pod cestou
+            water_lines.append(wl)
             continue
 
         if "building" in t and closed:
@@ -448,6 +542,8 @@ def build_osm(refresh, dem, hmin):
             continue
         if t.get("natural") == "tree":
             trees.append([x, z, 0, round(rnd.uniform(0.9, 1.3), 2)])
+        elif t.get("railway") in ("halt", "station") and t.get("name"):
+            pois.append({"n": t["name"], "k": "halt", "x": round(x, 1), "z": round(z, 1)})
         else:
             add_poi(t, x, z)
 
@@ -489,8 +585,8 @@ def build_osm(refresh, dem, hmin):
 
     # odstraň stromy na silnicích a v domech (zhruba)
     road_cells = set()
-    for r in roads:
-        if r["t"] in ("footway", "path", "steps"):
+    for r in roads + rails:
+        if r.get("t") in ("footway", "path", "steps"):
             continue
         p = r["p"]
         for i in range(len(p) - 1):
@@ -503,7 +599,57 @@ def build_osm(refresh, dem, hmin):
 
     print(f"silnice {len(roads)}, budovy {len(buildings)}, plochy {len(areas)}, "
           f"vodní toky {len(water_lines)}, stromy {len(trees)} (les {forest_trees}), místa {len(pois)}")
-    return roads, buildings, areas, water_lines, pois, trees
+    # železnice: spojit úseky do jedné trati (pro vláček)
+    line = chain_rails(rails)
+    print(f"železnice {len(rails)} úseků, trať pro vlak {len(line)} bodů")
+    return roads, buildings, areas, water_lines, pois, trees, rails, line
+
+
+def train_line(line, rails):
+    """Trať pro vláček: body po 4 m s výškou podle profilu kolejí (i na mostech)."""
+    if not line:
+        return []
+    rp = np.array([[x, z, h] for r in rails for (x, z), h in zip(r["p"], r["h"])])
+    out = []
+    for x, z in densify(line, 4.0):
+        if not in_bounds(x, z, -25):
+            continue  # vlak nejezdí mimo mapu
+        d = (rp[:, 0] - x) ** 2 + (rp[:, 1] - z) ** 2
+        out.append([round(x, 1), round(z, 1), round(float(rp[int(np.argmin(d)), 2]), 2)])
+    return out
+
+
+def chain_rails(rails):
+    """Najde nejdelší spojitou trať z úseků kolejí (podle sdílených koncových uzlů)."""
+    segs = [dict(r) for r in rails]
+    best = []
+    for start in range(len(segs)):
+        used = {start}
+        chain = list(segs[start]["p"])
+        a, b = segs[start]["ends"]
+        grown = True
+        while grown:
+            grown = False
+            for i, sg in enumerate(segs):
+                if i in used:
+                    continue
+                e0, e1 = sg["ends"]
+                if e0 == b:
+                    chain += sg["p"][1:]; b = e1
+                elif e1 == b:
+                    chain += sg["p"][::-1][1:]; b = e0
+                elif e1 == a:
+                    chain = sg["p"][:-1] + chain; a = e0
+                elif e0 == a:
+                    chain = sg["p"][::-1][:-1] + chain; a = e1
+                else:
+                    continue
+                used.add(i); grown = True
+                break
+        L = sum(math.hypot(chain[k + 1][0] - chain[k][0], chain[k + 1][1] - chain[k][1]) for k in range(len(chain) - 1))
+        if not best or L > best[0]:
+            best = [L, chain]
+    return best[1] if best else []
 
 
 def main():
@@ -512,9 +658,10 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     terrain, dem, hmin = build_heights(refresh)
     dem = smooth_dem(dem)
-    roads, buildings, areas, water, pois, trees = build_osm(refresh, dem, hmin)
-    road_profiles(roads, dem, hmin)
-    dem = flatten(dem, hmin, roads, buildings)
+    roads, buildings, areas, water, pois, trees, rails, line = build_osm(refresh, dem, hmin)
+    dem = carve_water(dem, hmin, water)
+    road_profiles(roads, rails, dem, hmin, water_sampler(water))
+    dem = flatten(dem, hmin, roads, buildings, rails)
     # výšky domů a cest podle srovnaného terénu
     for b in buildings:
         ground = [sample_height(dem, hmin, x, z) for x, z in b["p"]]
@@ -534,6 +681,8 @@ def main():
         "water": water,
         "pois": pois,
         "trees": trees,
+        "rails": rails,
+        "trainLine": train_line(line, rails),
     }
     with open(os.path.join(OUT, "map.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))

@@ -21,13 +21,15 @@
       box-shadow: 0 12px 40px rgba(30,60,30,0.25); text-align: center; }
     h1 { margin: 0 0 4px; font-size: clamp(26px, 6vw, 38px); }
     .sub { margin: 0 0 20px; opacity: 0.75; }
-    .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .choices { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     .choices button { border: 0; border-radius: 18px; padding: 18px 10px; font-size: 18px; font-weight: 700; cursor: pointer;
       color: #fff; box-shadow: 0 4px 0 rgba(0,0,0,0.2); transition: transform .08s; }
     .choices button:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,0.2); }
     .choices .big { display: block; font-size: 48px; margin-bottom: 6px; }
     #start-kart { background: var(--accent); }
     #start-tractor { background: var(--green); }
+    #start-moto { background: #f07a1a; }
+    @media (max-width: 420px) { .choices button { font-size: 15px; padding: 14px 4px; } .choices .big { font-size: 38px; } }
     .help { margin-top: 18px; font-size: 14px; line-height: 1.6; opacity: 0.85; }
     .help kbd { background: #fff; border: 1px solid #ccd; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; font-size: 12px; }
     body.touch .help .keys { display: none; }
@@ -98,13 +100,14 @@
       <p class="sub">U babičky a dědy. Čím pojedeš?</p>
       <div class="choices">
         <button id="start-kart" data-start="kart"><span class="big">🏎️</span>Motokára</button>
+        <button id="start-moto" data-start="moto"><span class="big">🏍️</span>Krosska</button>
         <button id="start-tractor" data-start="tractor"><span class="big">🚜</span>Traktor</button>
       </div>
       <div class="help">
         <div class="keys">
           <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> nebo <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> jízda ·
           <kbd>mezerník</kbd> smyk · <kbd>H</kbd> houkačka<br>
-          <kbd>T</kbd> přesednout · <kbd>C</kbd> kamera · <kbd>R</kbd> zpátky na cestu · <kbd>N</kbd> celá mapa · <kbd>M</kbd> zvuk
+          <kbd>T</kbd> přesednout (motokára → krosska → traktor) · <kbd>C</kbd> kamera · <kbd>R</kbd> zpátky na cestu · <kbd>N</kbd> celá mapa · <kbd>M</kbd> zvuk
         </div>
         <div class="touchhelp">Vlevo zatáčíš, vpravo plyn a brzda. Nahoře vpravo přesedneš, změníš kameru nebo zatroubíš.</div>
       </div>

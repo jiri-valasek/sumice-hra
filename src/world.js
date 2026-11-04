@@ -295,11 +295,12 @@ export function paintGround(map, maxTex) {
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   mctx.lineCap = 'round'; mctx.lineJoin = 'round';
   for (const w of map.water) {
+    if (w.u) continue; // propustek pod cestou
     line(ctx, s, w.p);
     ctx.strokeStyle = '#6f9a52'; ctx.lineWidth = (w.w + 2.5) * s; ctx.stroke();
     ctx.strokeStyle = '#4f94c9'; ctx.lineWidth = w.w * s; ctx.stroke();
     line(mctx, ms, w.p);
-    mctx.strokeStyle = SURF_PAINT[SURF.WATER]; mctx.lineWidth = w.w * ms; mctx.stroke();
+    mctx.strokeStyle = SURF_PAINT[SURF.WATER]; mctx.lineWidth = Math.max(w.w, 3.5) * ms; mctx.stroke();
   }
 
   // stín pod budovami
@@ -602,7 +603,7 @@ export function buildTrees(map, terrain) {
 }
 
 // ------------------------------------------------------------ popisky
-const POI_ICON = { church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
+const POI_ICON = { halt: '🚉', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
 const POI_SKIP = new Set(['parcel_locker', 'static_caravan']);
 
 export function buildLabels(map, terrain) {
@@ -641,6 +642,7 @@ export class Colliders {
   constructor(polys, circles, cell = 16) {
     this.cell = cell;
     this.grid = new Map();
+    this.dynamic = []; // pohyblivé překážky (vlak): pole polygonů, mění se každý snímek
     for (const p of polys) {
       let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
       for (const [x, z] of p) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
@@ -674,6 +676,11 @@ export class Colliders {
           if (n) hit = n;
         }
       }
+    }
+    for (const d of this.dynamic) {
+      if (Math.abs(d.cx - pos.x) > d.r + R || Math.abs(d.cz - pos.z) > d.r + R) continue;
+      const n = this.poly(d.poly, pos, R);
+      if (n) { hit = n; hit.dynamic = d; }
     }
     return hit;
   }
@@ -721,4 +728,173 @@ export function nearestRoadPoint(map, x, z, types = null) {
     }
   }
   return best;
+}
+
+// ------------------------------------------------------------ mosty
+export class Bridges {
+  constructor(map) {
+    this.segs = [];
+    const add = (r, w) => {
+      for (let i = 0; i < r.p.length - 1; i++) {
+        const [x1, z1] = r.p[i], [x2, z2] = r.p[i + 1];
+        this.segs.push({ x1, z1, x2, z2, h1: r.h[i], h2: r.h[i + 1], hw: w / 2 + 0.3,
+          minx: Math.min(x1, x2) - w, maxx: Math.max(x1, x2) + w, minz: Math.min(z1, z2) - w, maxz: Math.max(z1, z2) + w });
+      }
+    };
+    for (const r of map.roads) if (r.b && r.h) add(r, r.w);
+    for (const r of map.rails || []) if (r.b) add(r, 3.2);
+  }
+  // výška mostovky pod bodem (nebo -Infinity)
+  deck(x, z) {
+    let best = -Infinity;
+    for (const s of this.segs) {
+      if (x < s.minx || x > s.maxx || z < s.minz || z > s.maxz) continue;
+      const ex = s.x2 - s.x1, ez = s.z2 - s.z1, L2 = ex * ex + ez * ez || 1;
+      const t = Math.max(0, Math.min(1, ((x - s.x1) * ex + (z - s.z1) * ez) / L2));
+      const d = Math.hypot(x - (s.x1 + ex * t), z - (s.z1 + ez * t));
+      if (d <= s.hw) best = Math.max(best, s.h1 + (s.h2 - s.h1) * t + 0.12);
+    }
+    return best;
+  }
+}
+
+export function buildBridgeMeshes(map) {
+  const gb = new GeoBuilder();
+  const slab = C('#a7a39a'), rail = C('#3d5a7a'), post = C('#2f3b48');
+  const make = (r, w, railings) => {
+    const p = r.p, h = r.h;
+    for (let i = 0; i < p.length - 1; i++) {
+      const [x1, z1] = p[i], [x2, z2] = p[i + 1];
+      let dx = x2 - x1, dz = z2 - z1;
+      const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+      const nx = -dz, nz = dx, hw = w / 2 + 0.25;
+      const y1 = h[i] + 0.05, y2 = h[i + 1] + 0.05;
+      const A = [x1 + nx * hw, z1 + nz * hw], B = [x2 + nx * hw, z2 + nz * hw];
+      const Cc = [x2 - nx * hw, z2 - nz * hw], D = [x1 - nx * hw, z1 - nz * hw];
+      // boky mostovky
+      gb.quad([A[0], y1, A[1]], [B[0], y2, B[1]], [B[0], y2 - 0.7, B[1]], [A[0], y1 - 0.7, A[1]], slab, [nx, 0, nz]);
+      gb.quad([D[0], y1, D[1]], [Cc[0], y2, Cc[1]], [Cc[0], y2 - 0.7, Cc[1]], [D[0], y1 - 0.7, D[1]], slab, [-nx, 0, -nz]);
+      gb.quad([A[0], y1 - 0.7, A[1]], [B[0], y2 - 0.7, B[1]], [Cc[0], y2 - 0.7, Cc[1]], [D[0], y1 - 0.7, D[1]], slab, [0, -1, 0]);
+      if (!railings) continue;
+      for (const s of [1, -1]) {
+        const ox = nx * hw * s, oz = nz * hw * s;
+        const P1 = [x1 + ox, y1 + 1.0, z1 + oz], P2 = [x2 + ox, y2 + 1.0, z2 + oz];
+        gb.quad(P1, P2, [P2[0], P2[1] + 0.12, P2[2]], [P1[0], P1[1] + 0.12, P1[2]], rail, [nx * s, 0, nz * s]);
+        gb.quad(P1, P2, [P2[0], P2[1] + 0.12, P2[2]], [P1[0], P1[1] + 0.12, P1[2]], rail, [-nx * s, 0, -nz * s]);
+        gb.box(x1 + ox, z1 + oz, y1, y1 + 1.12, 0.06, 0.06, Math.atan2(dz, dx), post);
+      }
+    }
+  };
+  for (const r of map.roads) if (r.b && r.h) make(r, r.w, true);
+  for (const r of map.rails || []) if (r.b) make(r, 3.2, false);
+  const m = new THREE.Mesh(gb.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
+// ------------------------------------------------------------ voda
+export function buildWater(map) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 64, 0);
+  g.addColorStop(0, '#d8f0ff'); g.addColorStop(0.12, '#4aa3df'); g.addColorStop(0.5, '#2f86c8');
+  g.addColorStop(0.88, '#4aa3df'); g.addColorStop(1, '#d8f0ff');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 128);
+  const rnd = hashRand(3);
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 2;
+  for (let i = 0; i < 26; i++) {
+    const x = 8 + rnd() * 48, y = rnd() * 128;
+    ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.quadraticCurveTo(x, y - 3, x + 5, y); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace;
+
+  const pos = [], uv = [], idx = [];
+  for (const wl of map.water) {
+    if (wl.u || !wl.h) continue;
+    const p = wl.p, hw = wl.w / 2 + 0.6;
+    const base = pos.length / 3;
+    let dist = 0;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[Math.max(0, i - 1)], b = p[Math.min(p.length - 1, i + 1)];
+      let tx = b[0] - a[0], tz = b[1] - a[1];
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      if (i > 0) dist += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+      for (const s of [-1, 1]) {
+        pos.push(p[i][0] - tz * hw * s, wl.h[i], p[i][1] + tx * hw * s);
+        uv.push(s < 0 ? 0 : 1, dist / 6);
+      }
+      if (i > 0) { const o = base + (i - 1) * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.82, side: THREE.DoubleSide, depthWrite: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 6;
+  mesh.userData.flow = tex;
+  return mesh;
+}
+
+// ------------------------------------------------------------ koleje
+export function buildRails(map) {
+  const rails = map.rails || [];
+  if (!rails.length) return [];
+  // štěrkové lože s pražci (textura)
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#8d8478'; ctx.fillRect(0, 0, 64, 64);
+  const rnd = hashRand(11);
+  for (let i = 0; i < 700; i++) { ctx.fillStyle = rnd() < 0.5 ? 'rgba(60,55,50,0.35)' : 'rgba(200,195,185,0.3)'; ctx.fillRect(rnd() * 64, rnd() * 64, 2, 2); }
+  ctx.fillStyle = '#5a4433'; ctx.fillRect(8, 20, 48, 22); // pražec
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(8, 40, 48, 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+
+  const bed = { pos: [], uv: [], idx: [] };
+  const steel = new GeoBuilder();
+  const steelC = C('#b9bcc0'), steelS = C('#6b5a4c');
+  for (const r of rails) {
+    const p = r.p, h = r.h;
+    const base = bed.pos.length / 3;
+    let dist = 0;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[Math.max(0, i - 1)], b = p[Math.min(p.length - 1, i + 1)];
+      let tx = b[0] - a[0], tz = b[1] - a[1];
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const nx = -tz, nz = tx;
+      if (i > 0) dist += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+      for (const s of [-1, 1]) {
+        bed.pos.push(p[i][0] + nx * 1.6 * s, h[i] + 0.14, p[i][1] + nz * 1.6 * s);
+        bed.uv.push(s < 0 ? 0 : 1, dist / 0.65);
+      }
+      if (i > 0) { const o = base + (i - 1) * 2; bed.idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
+      if (i > 0) {
+        const [x1, z1] = p[i - 1], [x2, z2] = p[i];
+        const y1 = h[i - 1] + 0.3, y2 = h[i] + 0.3;
+        for (const off of [-0.72, 0.72]) {
+          const ax = x1 + nx * off, az = z1 + nz * off, bx = x2 + nx * off, bz = z2 + nz * off;
+          // hlava kolejnice + bok
+          steel.quad([ax - nx * 0.04, y1, az - nz * 0.04], [bx - nx * 0.04, y2, bz - nz * 0.04], [bx + nx * 0.04, y2, bz + nz * 0.04], [ax + nx * 0.04, y1, az + nz * 0.04], steelC, [0, 1, 0]);
+          steel.quad([ax + nx * 0.04, y1, az + nz * 0.04], [bx + nx * 0.04, y2, bz + nz * 0.04], [bx + nx * 0.04, y2 - 0.16, bz + nz * 0.04], [ax + nx * 0.04, y1 - 0.16, az + nz * 0.04], steelS, [nx, 0, nz]);
+          steel.quad([ax - nx * 0.04, y1, az - nz * 0.04], [bx - nx * 0.04, y2, bz - nz * 0.04], [bx - nx * 0.04, y2 - 0.16, bz - nz * 0.04], [ax - nx * 0.04, y1 - 0.16, az - nz * 0.04], steelS, [-nx, 0, -nz]);
+        }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(bed.pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(bed.uv, 2));
+  g.setIndex(bed.idx);
+  g.computeVertexNormals();
+  const bedMesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ map: tex, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -8 }));
+  bedMesh.receiveShadow = true;
+  bedMesh.renderOrder = 5;
+  const steelMesh = new THREE.Mesh(steel.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  return [bedMesh, steelMesh];
 }
