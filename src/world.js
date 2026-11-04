@@ -460,7 +460,7 @@ const C = (hex) => new THREE.Color(hex);
 const WALLS = ['#f4f0e6', '#efe4c6', '#eadcc0', '#f3e7d1', '#e7e2d8', '#f1dba9', '#e2e9ec', '#f2d7c4', '#e9efd9'].map(C);
 const ROOFS = ['#a9442a', '#b5552f', '#8e3b27', '#6d4b3b', '#5b6067', '#9c402c', '#7a3424', '#b0613a'].map(C);
 const AG_WALL = C('#d8d1c2'), AG_ROOF = C('#7c7f82'), FLAT_ROOF = C('#6e6a66');
-const CHURCH_WALL = C('#f6f1e2'), CHURCH_ROOF = C('#5c6a70'), TOWER_ROOF = C('#3f6b5c');
+const CHURCH_WALL = C('#f3e3b3'), CHURCH_ROOF = C('#b4532f'), TOWER_ROOF = C('#3d4448');
 const BASE = C('#a39a8a');
 
 const SMALL = new Set(['garage', 'garages', 'shed', 'carport', 'roof', 'hut', 'kiosk', 'container', 'static_caravan', 'toilets']);
@@ -477,10 +477,11 @@ export function buildBuildings(map) {
     const ring = b.p;
     const area = Math.abs(polyArea(ring));
     const box = obb(ring);
-    const rectish = area / box.area > 0.82 && box.W > 1.2;
+    const sacral = t === 'church' || t === 'chapel';
+    const rectish = sacral || (area / box.area > 0.82 && box.W > 1.2);
 
     let wallH, pitch, wallC, roofC, flatRoof = false;
-    if (t === 'church') { wallH = 12; pitch = 0.85; wallC = CHURCH_WALL; roofC = CHURCH_ROOF; }
+    if (t === 'church') { wallH = 9; pitch = 0.85; wallC = CHURCH_WALL; roofC = CHURCH_ROOF; }
     else if (t === 'chapel') { wallH = 5; pitch = 0.85; wallC = CHURCH_WALL; roofC = CHURCH_ROOF; }
     else if (SMALL.has(t)) { wallH = 2.5; pitch = 0.2; wallC = pick(WALLS, rnd()); roofC = FLAT_ROOF; flatRoof = !rectish || area < 30 || rnd() < 0.5; }
     else if (AG.has(t) || area > 400) { wallH = 5; pitch = 0.45; wallC = AG_WALL; roofC = AG_ROOF; }

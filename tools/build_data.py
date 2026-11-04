@@ -52,17 +52,44 @@ def fetch(url, path, refresh):
 
 # ---------------------------------------------------------------- terén
 def build_heights(refresh):
+    """Stáhne DMR 5G a převzorkuje ho na naši metrovou mřížku.
+
+    Pozor: ArcGIS exportImage si výřez upraví tak, aby pixely měly čtvercový tvar
+    ve stupních – proto čteme skutečný vrácený výřez (f=json) a podle něj
+    převzorkujeme. (Dřív to tu chybělo a terén byl svisle zdeformovaný.)"""
     w = int(round(WIDTH_M / DEM_RES)) + 1
     h = int(round(HEIGHT_M / DEM_RES)) + 1
-    url = (
-        "https://ags.cuzk.cz/arcgis2/rest/services/dmr5g/ImageServer/exportImage"
-        f"?bbox={LON_MIN},{LAT_MIN},{LON_MAX},{LAT_MAX}&bboxSR=4326&imageSR=4326"
-        f"&size={w},{h}&format=tiff&pixelType=F32"
-        "&interpolation=RSP_BilinearInterpolation&f=image"
-    )
-    path = fetch(url, os.path.join(CACHE, f"dmr5g_{w}x{h}.tif"), refresh)
-    a = np.array(Image.open(path), dtype=np.float32)
-    assert a.shape == (h, w), a.shape
+    m = 0.002  # okraj navíc
+    bx0, by0, bx1, by1 = LON_MIN - m, LAT_MIN - m, LON_MAX + m, LAT_MAX + m
+    sw = 1000
+    sh = int(round(sw * (by1 - by0) / (bx1 - bx0)))  # čtvercové pixely ve stupních
+    base = ("https://ags.cuzk.cz/arcgis2/rest/services/dmr5g/ImageServer/exportImage"
+            f"?bbox={bx0},{by0},{bx1},{by1}&bboxSR=4326&imageSR=4326"
+            f"&size={sw},{sh}&format=tiff&pixelType=F32&interpolation=RSP_BilinearInterpolation")
+    meta_path = os.path.join(CACHE, f"dmr5g_{sw}x{sh}.json")
+    tif_path = os.path.join(CACHE, f"dmr5g_{sw}x{sh}.tif")
+    if refresh or not (os.path.exists(meta_path) and os.path.exists(tif_path)):
+        fetch(base + "&f=json", meta_path, True)
+        meta = json.load(open(meta_path))
+        fetch(meta["href"], tif_path, True)
+    meta = json.load(open(meta_path))
+    ext = meta["extent"]
+    src = np.array(Image.open(tif_path), dtype=np.float64)
+    sh_, sw_ = src.shape
+    print(f"ČÚZK vrátil výřez lon {ext['xmin']:.5f}–{ext['xmax']:.5f}, lat {ext['ymin']:.5f}–{ext['ymax']:.5f}, {sw_}x{sh_} px")
+    # pixel-is-area: střed pixelu i leží na xmin + (i+0.5)*dx
+    dx = (ext["xmax"] - ext["xmin"]) / sw_
+    dy = (ext["ymax"] - ext["ymin"]) / sh_
+    lons = LON_MIN + (LON_MAX - LON_MIN) * np.arange(w) / (w - 1)
+    lats = LAT_MAX - (LAT_MAX - LAT_MIN) * np.arange(h) / (h - 1)  # řádek 0 = sever
+    u = (lons - ext["xmin"]) / dx - 0.5
+    v = (ext["ymax"] - lats) / dy - 0.5
+    assert u.min() >= 0 and u.max() <= sw_ - 1 and v.min() >= 0 and v.max() <= sh_ - 1, "výřez nepokrývá mapu"
+    i0 = np.clip(np.floor(u).astype(int), 0, sw_ - 2); fu = u - i0
+    j0 = np.clip(np.floor(v).astype(int), 0, sh_ - 2); fv = v - j0
+    I0, J0 = np.meshgrid(i0, j0); FU, FV = np.meshgrid(fu, fv)
+    a = ((src[J0, I0] * (1 - FU) + src[J0, I0 + 1] * FU) * (1 - FV)
+         + (src[J0 + 1, I0] * (1 - FU) + src[J0 + 1, I0 + 1] * FU) * FV)
     hmin = float(np.floor(a.min()))
     print(f"terén {w}x{h}, {a.min():.1f}–{a.max():.1f} m n. m.")
     return {"w": w, "h": h, "min": hmin, "scale": 0.01, "file": "heights.bin"}, a, hmin
