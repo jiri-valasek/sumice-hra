@@ -17,6 +17,10 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 $('#game').appendChild(renderer.domElement);
 
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+// slabší zařízení (malý telefon) -> hrubší terén; ?lite / ?full v adrese to přebije
+const LOW_POWER = location.search.includes('lite') || (!location.search.includes('full') && isTouch && Math.min(screen.width, screen.height) < 500);
+
 const SKY = new THREE.Color('#a9d3f2');
 const scene = new THREE.Scene();
 scene.background = SKY;
@@ -52,7 +56,7 @@ async function load() {
   const hbuf = await hRes.arrayBuffer();
 
   status('Modeluji kopce…'); await nextFrame();
-  world.terrain = new Terrain(map, hbuf);
+  world.terrain = new Terrain(map, hbuf, LOW_POWER);
 
   status('Maluji pole, louky a silnice…'); await nextFrame();
   const ground = paintGround(map, renderer.capabilities.maxTextureSize);
@@ -272,7 +276,6 @@ function toast(t) {
 }
 
 // ------------------------------------------------------------ start
-const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 if (isTouch) document.body.classList.add('touch');
 
 load().then(() => {

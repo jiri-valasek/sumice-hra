@@ -64,11 +64,114 @@ def build_heights(refresh):
     a = np.array(Image.open(path), dtype=np.float32)
     assert a.shape == (h, w), a.shape
     hmin = float(np.floor(a.min()))
-    q = np.clip(np.round((a - hmin) * 100), 0, 65535).astype("<u2")  # centimetry nad minimem
-    with open(os.path.join(OUT, "heights.bin"), "wb") as f:
-        f.write(q.tobytes())
     print(f"terén {w}x{h}, {a.min():.1f}–{a.max():.1f} m n. m.")
     return {"w": w, "h": h, "min": hmin, "scale": 0.01, "file": "heights.bin"}, a, hmin
+
+
+def write_heights(dem, hmin):
+    q = np.clip(np.round((dem - hmin) * 100), 0, 65535).astype("<u2")  # centimetry nad minimem
+    with open(os.path.join(OUT, "heights.bin"), "wb") as f:
+        f.write(q.tobytes())
+
+
+# ---------------------------------------------------------------- srovnání terénu
+def smooth_dem(a, passes=2):
+    """Jemné zahlazení (binomický filtr 3x3)."""
+    a = a.astype(np.float64)
+    for _ in range(passes):
+        p = np.pad(a, 1, mode="edge")
+        a = (p[:-2, :-2] + 2 * p[:-2, 1:-1] + p[:-2, 2:]
+             + 2 * p[1:-1, :-2] + 4 * p[1:-1, 1:-1] + 2 * p[1:-1, 2:]
+             + p[2:, :-2] + 2 * p[2:, 1:-1] + p[2:, 2:]) / 16
+    return a
+
+
+def grid_xz(dem):
+    hgt, wid = dem.shape
+    xs = np.linspace(-WIDTH_M / 2, WIDTH_M / 2, wid)
+    zs = np.linspace(-HEIGHT_M / 2, HEIGHT_M / 2, hgt)
+    return xs, zs
+
+
+def smoothstep(e0, e1, d):
+    t = np.clip((d - e0) / (e1 - e0), 0, 1)
+    return 1 - t * t * (3 - 2 * t)
+
+
+def densify(p, step):
+    out = []
+    for i in range(len(p) - 1):
+        (x1, z1), (x2, z2) = p[i], p[i + 1]
+        n = max(1, int(math.ceil(math.hypot(x2 - x1, z2 - z1) / step)))
+        for k in range(n):
+            out.append([x1 + (x2 - x1) * k / n, z1 + (z2 - z1) * k / n])
+    out.append(list(p[-1]))
+    return out
+
+
+FOOT = ("footway", "path", "steps", "cycleway")
+
+
+def road_profiles(roads, dem, hmin):
+    """Plynulý výškový profil podél každé cesty (bez náklonu do stran)."""
+    for r in roads:
+        pts = densify(r["p"], 3.0)
+        r["p"] = [[round(x, 1), round(z, 1)] for x, z in pts]
+        if r["t"] in FOOT:
+            continue
+        hs = np.array([sample_height(dem, hmin, x, z) for x, z in pts])
+        # klouzavý průměr ~ 24 m silnice, 15 m polní cesty
+        win = 8 if r["s"] else 5
+        if len(hs) > 2:
+            k = np.ones(2 * win + 1)
+            pad = np.pad(hs, win, mode="edge")
+            hs = np.convolve(pad, k, "valid") / k.sum()
+        r["h"] = [round(float(v), 2) for v in hs]
+
+
+def flatten(dem, hmin, roads, buildings):
+    xs, zs = grid_xz(dem)
+    res = xs[1] - xs[0]
+    out = dem.copy()
+
+    def splat(acc_num, acc_den, acc_w, x, z, target, core, blend):
+        R = core + blend
+        i0 = max(0, int((x - R - xs[0]) / res)); i1 = min(len(xs) - 1, int((x + R - xs[0]) / res) + 1)
+        j0 = max(0, int((z - R - zs[0]) / res)); j1 = min(len(zs) - 1, int((z + R - zs[0]) / res) + 1)
+        if i1 < i0 or j1 < j0:
+            return
+        gx, gz = np.meshgrid(xs[i0:i1 + 1], zs[j0:j1 + 1])
+        d = np.hypot(gx - x, gz - z)
+        wgt = smoothstep(core, R, d)
+        sl = (slice(j0, j1 + 1), slice(i0, i1 + 1))
+        acc_num[sl] += wgt * target
+        acc_den[sl] += wgt
+        np.maximum(acc_w[sl], wgt, out=acc_w[sl])
+
+    # 1) plošiny pod domy
+    num = np.zeros_like(dem); den = np.zeros_like(dem); wmax = np.zeros_like(dem)
+    for b in buildings:
+        ring = b["p"]
+        ground = [sample_height(out, hmin, x, z) for x, z in ring]
+        level = float(np.median(ground)) + hmin
+        cx, cz = centroid(ring)
+        rad = max(math.hypot(x - cx, z - cz) for x, z in ring)
+        splat(num, den, wmax, cx, cz, level, rad + 1.5, 5.0)
+    m = den > 0
+    out[m] = out[m] * (1 - wmax[m]) + (num[m] / den[m]) * wmax[m]
+
+    # 2) koridory silnic (přebijí plošiny domů)
+    num = np.zeros_like(dem); den = np.zeros_like(dem); wmax = np.zeros_like(dem)
+    for r in roads:
+        if "h" not in r:
+            continue
+        core = r["w"] / 2 + 1.5
+        blend = 7.0 if r["s"] else 5.0
+        for (x, z), h in zip(r["p"], r["h"]):
+            splat(num, den, wmax, x, z, h + hmin, core, blend)
+    m = den > 0
+    out[m] = out[m] * (1 - wmax[m]) + (num[m] / den[m]) * wmax[m]
+    return out
 
 
 def sample_height(dem, hmin, x, z):
@@ -381,7 +484,17 @@ def main():
     os.makedirs(CACHE, exist_ok=True)
     os.makedirs(OUT, exist_ok=True)
     terrain, dem, hmin = build_heights(refresh)
+    dem = smooth_dem(dem)
     roads, buildings, areas, water, pois, trees = build_osm(refresh, dem, hmin)
+    road_profiles(roads, dem, hmin)
+    dem = flatten(dem, hmin, roads, buildings)
+    # výšky domů a cest podle srovnaného terénu
+    for b in buildings:
+        ground = [sample_height(dem, hmin, x, z) for x, z in b["p"]]
+        b["y"] = round(float(min(ground)), 2)
+        b["dy"] = round(float(max(ground) - min(ground)), 2)
+    write_heights(dem, hmin)
+    print("terén srovnán pod silnicemi a domy")
     out = {
         "name": "Šumice",
         "attribution": "Mapová data © přispěvatelé OpenStreetMap (ODbL), výškopis © ČÚZK (DMR 5G)",

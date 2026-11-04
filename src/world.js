@@ -11,15 +11,15 @@ const pick = (arr, r) => arr[Math.floor(r * arr.length) % arr.length];
 
 // ------------------------------------------------------------ terén
 export class Terrain {
-  constructor(map, heightsBuf) {
+  constructor(map, heightsBuf, lowPower = false) {
     const t = map.terrain;
     const raw = new Uint16Array(heightsBuf);
     this.W = map.size[0];
     this.H = map.size[1];
-    // převzorkování na mřížku ~10 m (stejná mřížka pro vykreslení i fyziku)
-    const step = 2;
-    this.nx = Math.ceil(t.w / step) + 1;
-    this.nz = Math.ceil(t.h / step) + 1;
+    // mřížka 5 m (stejná pro vykreslení i fyziku); slabší zařízení 10 m
+    const step = lowPower ? 2 : 1;
+    this.nx = Math.ceil((t.w - 1) / step) + 1;
+    this.nz = Math.ceil((t.h - 1) / step) + 1;
     this.h = new Float32Array(this.nx * this.nz);
     const src = (i, j) => raw[j * t.w + i] * t.scale;
     for (let j = 0; j < this.nz; j++) {
@@ -159,15 +159,7 @@ export function buildRoads(map, terrain) {
   for (const [kind, list] of Object.entries(groups)) {
     const pos = [], uv = [], idx = [];
     for (const r of list) {
-      // zhustit body, ať pás sleduje terén
-      const pts = [];
-      for (let i = 0; i < r.p.length - 1; i++) {
-        const [x1, z1] = r.p[i], [x2, z2] = r.p[i + 1];
-        const L = Math.hypot(x2 - x1, z2 - z1);
-        const n = Math.max(1, Math.ceil(L / 3));
-        for (let k = 0; k < n; k++) pts.push([x1 + (x2 - x1) * k / n, z1 + (z2 - z1) * k / n]);
-      }
-      pts.push(r.p[r.p.length - 1]);
+      const pts = r.p; // body už jsou zhuštěné po ~3 m (tools/build_data.py)
       if (pts.length < 2) continue;
       const hw = r.w / 2;
       const base = pos.length / 3;
@@ -180,7 +172,9 @@ export function buildRoads(map, terrain) {
         if (i > 0) dist += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
         for (const s of [-1, 1]) {
           const x = pts[i][0] + nx * hw * s, z = pts[i][1] + nz * hw * s;
-          const y = Math.max(terrain.height(x, z), terrain.height(pts[i][0], pts[i][1]) - 0.3) + 0.06 + order[kind] * 0.01;
+          // silnice s profilem: vodorovně napříč; pěšinky kopírují terén
+          const groundY = r.h ? Math.max(r.h[i], terrain.height(x, z) - 0.05) : Math.max(terrain.height(x, z), terrain.height(pts[i][0], pts[i][1]) - 0.3);
+          const y = groundY + 0.08 + order[kind] * 0.01;
           pos.push(x, y, z);
           uv.push(s < 0 ? 0 : 1, dist / 8);
         }

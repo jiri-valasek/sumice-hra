@@ -31,7 +31,7 @@ Pak otevři http://localhost:8000
 Data ve složce `data/` generuje skript `tools/build_data.py`:
 
 - **OpenStreetMap** (silnice, budovy, plochy, stromy, zajímavá místa) přes API `api.openstreetmap.org`
-- **ČÚZK DMR 5G** (výškový model terénu, 5 m mřížka)
+- **ČÚZK DMR 5G** (výškový model terénu, 5 m mřížka). Terén se jemně zahladí a pod silnicemi a domy srovná (plynulý podélný profil, bez náklonu do stran).
 
 ```bash
 python3 tools/build_data.py --refresh
