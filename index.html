@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Jízda po Šumicích</title>
+  <meta name="theme-color" content="#a9d3f2">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚜</text></svg>">
+  <style>
+    :root { --ui: rgba(255,255,255,0.88); --ink: #23331f; --accent: #e0392b; --green: #3d8b3a; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d3f2; color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; }
+    #game canvas { display: block; }
+    .hidden { display: none !important; }
+
+    #loading, #menu { position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
+      background: linear-gradient(180deg, #bfe2fb 0%, #e9f6df 70%, #b8d98f 100%); }
+    #menu { background: rgba(169, 211, 242, 0.35); backdrop-filter: blur(3px); }
+    .card { background: var(--ui); border-radius: 24px; padding: 28px 28px 22px; width: min(520px, calc(100vw - 32px));
+      box-shadow: 0 12px 40px rgba(30,60,30,0.25); text-align: center; }
+    h1 { margin: 0 0 4px; font-size: clamp(26px, 6vw, 38px); }
+    .sub { margin: 0 0 20px; opacity: 0.75; }
+    .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .choices button { border: 0; border-radius: 18px; padding: 18px 10px; font-size: 18px; font-weight: 700; cursor: pointer;
+      color: #fff; box-shadow: 0 4px 0 rgba(0,0,0,0.2); transition: transform .08s; }
+    .choices button:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,0.2); }
+    .choices .big { display: block; font-size: 48px; margin-bottom: 6px; }
+    #start-kart { background: var(--accent); }
+    #start-tractor { background: var(--green); }
+    .help { margin-top: 18px; font-size: 14px; line-height: 1.6; opacity: 0.85; }
+    .help kbd { background: #fff; border: 1px solid #ccd; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; font-size: 12px; }
+    body.touch .help .keys { display: none; }
+    body:not(.touch) .help .touchhelp { display: none; }
+    .spinner { font-size: 56px; animation: bob 1s ease-in-out infinite; }
+    @keyframes bob { 50% { transform: translateY(-8px) rotate(-4deg); } }
+
+    #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+    #hud > * { pointer-events: auto; }
+    .panel { position: absolute; background: var(--ui); border-radius: 16px; box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
+    #info { left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); padding: 8px 14px; }
+    #vehicle-name { font-weight: 800; }
+    #place { font-size: 14px; opacity: 0.85; max-width: 46vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #speedo { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); padding: 6px 16px; text-align: center; }
+    #speed { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+    #speedo small { display: block; font-size: 12px; opacity: 0.7; }
+    #minimap { position: absolute; right: max(12px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top));
+      width: 170px; height: 170px; border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,0.2); cursor: pointer; }
+    #tools { position: absolute; right: max(12px, env(safe-area-inset-right)); top: calc(max(12px, env(safe-area-inset-top)) + 180px);
+      display: flex; flex-direction: column; gap: 8px; }
+    #tools button, .pad button { border: 0; background: var(--ui); border-radius: 14px; font-size: 22px; width: 50px; height: 50px;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.15); cursor: pointer; }
+    #tools button:active { transform: scale(0.93); }
+    #toast { position: absolute; left: 50%; top: 18%; transform: translateX(-50%); background: var(--ui); padding: 8px 16px;
+      border-radius: 999px; font-weight: 700; opacity: 0; transition: opacity .25s; pointer-events: none; }
+    #toast.show { opacity: 1; }
+    #attribution { position: absolute; left: 8px; bottom: 4px; font-size: 10px; opacity: 0.6; pointer-events: none; }
+
+    .pad { position: absolute; bottom: max(18px, env(safe-area-inset-bottom)); display: none; gap: 14px; }
+    body.touch .pad { display: flex; }
+    .pad button { width: 84px; height: 84px; border-radius: 50%; font-size: 34px; touch-action: none; }
+    .pad button.on { background: #fff; transform: scale(0.94); box-shadow: 0 0 0 4px rgba(255,255,255,0.6); }
+    #pad-steer { left: max(18px, env(safe-area-inset-left)); }
+    #pad-drive { right: max(18px, env(safe-area-inset-right)); bottom: calc(max(18px, env(safe-area-inset-bottom)) + 80px); flex-direction: column-reverse; align-items: flex-end; }
+    #pad-drive .gas { background: rgba(140, 220, 120, 0.92); width: 96px; height: 96px; }
+    #pad-drive .brake { background: rgba(255, 170, 150, 0.92); width: 72px; height: 72px; }
+    body.touch #speedo { bottom: max(12px, env(safe-area-inset-bottom)); right: calc(max(18px, env(safe-area-inset-right)) + 110px); }
+    @media (max-height: 500px) {
+      #minimap { width: 120px; height: 120px; }
+      #tools { top: calc(max(12px, env(safe-area-inset-top)) + 128px); flex-direction: row; right: calc(max(12px, env(safe-area-inset-right)) + 0px); }
+      #tools button { width: 42px; height: 42px; font-size: 18px; }
+      .pad button { width: 70px; height: 70px; }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="game"></div>
+
+  <div id="loading">
+    <div class="card">
+      <div class="spinner">🚜</div>
+      <h1>Šumice</h1>
+      <p class="sub" id="loading-text">Nakládám…</p>
+    </div>
+  </div>
+
+  <div id="menu" class="hidden">
+    <div class="card">
+      <h1>Jedeme do Šumic! 🏡</h1>
+      <p class="sub">U babičky a dědy. Čím pojedeš?</p>
+      <div class="choices">
+        <button id="start-kart" data-start="kart"><span class="big">🏎️</span>Motokára</button>
+        <button id="start-tractor" data-start="tractor"><span class="big">🚜</span>Traktor</button>
+      </div>
+      <div class="help">
+        <div class="keys">
+          <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> nebo <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> jízda ·
+          <kbd>mezerník</kbd> smyk · <kbd>H</kbd> houkačka<br>
+          <kbd>T</kbd> přesednout · <kbd>C</kbd> kamera · <kbd>R</kbd> zpátky na cestu · <kbd>N</kbd> celá mapa · <kbd>M</kbd> zvuk
+        </div>
+        <div class="touchhelp">Vlevo zatáčíš, vpravo plyn a brzda. Nahoře vpravo přesedneš, změníš kameru nebo zatroubíš.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div id="info" class="panel"><div id="vehicle-name">Motokára</div><div id="place">🏡 Šumice</div></div>
+    <canvas id="minimap" width="340" height="340" data-action="map" title="Celá mapa (N)"></canvas>
+    <div id="tools">
+      <button data-action="switch" title="Přesednout (T)">🔄</button>
+      <button data-action="horn" title="Houkačka (H)">📯</button>
+      <button data-action="camera" title="Kamera (C)">🎥</button>
+      <button data-action="reset" title="Zpátky na cestu (R)">📍</button>
+      <button data-action="mute" id="btn-mute" title="Zvuk (M)">🔊</button>
+    </div>
+    <div id="speedo" class="panel"><div id="speed">0</div><small>km/h</small></div>
+    <div id="toast"></div>
+    <div id="pad-steer" class="pad">
+      <button data-hold="left" aria-label="Doleva">◀</button>
+      <button data-hold="right" aria-label="Doprava">▶</button>
+    </div>
+    <div id="pad-drive" class="pad">
+      <button class="gas" data-hold="gas" aria-label="Plyn">⏫</button>
+      <button class="brake" data-hold="brake" aria-label="Brzda / couvání">⏬</button>
+    </div>
+    <div id="attribution"></div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
