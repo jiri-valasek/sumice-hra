@@ -402,6 +402,11 @@ AREA_ORDER = ["residential", "farmland", "meadow", "grass", "garden", "orchard",
 
 POI_KEYS = ("amenity", "shop", "tourism", "historic", "leisure", "office", "craft")
 
+# Potoky svedené do potrubí: OSM id -> v jaké vzdálenosti od domů je potok pod zemí (m)
+PIPED_STREAMS = {
+    "81893492": 70,  # Ledský potok – v obci sveden do potrubí (cca 60. léta)
+}
+
 # Dominanty obce – vzhled podle virtuální prohlídky na sumice.cz (OSM id budovy -> styl, popisek, počet pater)
 LANDMARKS = {
     "36998573": ("church", None, None),
@@ -556,6 +561,8 @@ def build_osm(refresh, dem, hmin):
             wl = {"w": width, "d": depth, "p": p}
             if t.get("tunnel") or t.get("culvert") or t.get("location") == "underground":
                 wl["u"] = 1  # propustek – pod cestou
+            if wid in PIPED_STREAMS:
+                wl["pipe"] = PIPED_STREAMS[wid]
             water_lines.append(wl)
             continue
 
@@ -722,6 +729,28 @@ def build_osm(refresh, dem, hmin):
                 trees.append([round(float(x), 1), round(float(z), 1), kind, round(rnd.uniform(0.7, 1.15), 2)])
                 garden += 1
     print("stromy v zahradách", garden)
+
+    # potoky v potrubí: rozdělit na otevřené úseky a podzemní úsek u domů
+    centers = np.array([centroid(b["p"]) for b in buildings]) if buildings else np.zeros((0, 2))
+    split = []
+    for wl in water_lines:
+        lim = wl.pop("pipe", None)
+        if lim is None:
+            split.append(wl)
+            continue
+        pts = densify(wl["p"], 5.0)
+        under = [bool(len(centers)) and float(np.min(np.hypot(centers[:, 0] - x, centers[:, 1] - z))) < lim for x, z in pts]
+        start = 0
+        for i in range(1, len(pts) + 1):
+            if i == len(pts) or under[i] != under[start]:
+                seg = pts[max(0, start - 1):i] if start else pts[start:i]
+                if len(seg) >= 2:
+                    part = dict(wl, p=seg)
+                    if under[start]:
+                        part["u"] = 1
+                    split.append(part)
+                start = i
+    water_lines[:] = split
 
     # husté stromy a vrby kolem rybníků (jako na leteckém snímku)
     pond_n = 0
