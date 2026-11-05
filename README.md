@@ -43,7 +43,7 @@ Výřez mapy (souřadnice) se nastavuje na začátku skriptu.
 
 - `index.html`: stránka, HUD, menu a dotyková tlačítka
 - `src/world.js`: terén, malovaný povrch, silnice, budovy, stromy, popisky a kolize
-- `src/vehicles.js`: modely vozidel a jízdní fyzika (včetně skoků)
+- `src/vehicles.js`: modely vozidel a jízdní fyzika
 - `src/train.js`: vláček na trati
 - `src/input.js`: klávesnice a dotyk
 - `src/audio.js`: syntetizovaný zvuk motoru a houkačka

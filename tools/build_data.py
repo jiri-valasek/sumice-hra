@@ -232,6 +232,43 @@ def water_sampler(water):
     return f
 
 
+def fix_bridges(roads, rails, dem, hmin, water_h):
+    """Konce mostovky napojí na výšku navazující cesty (žádný schod na nájezdu)."""
+    def ends_of(lst):
+        pts = []
+        for r in lst:
+            if r.get("b") or "h" not in r:
+                continue
+            for k in (0, -1):
+                pts.append((r["p"][k][0], r["p"][k][1], r["h"][k]))
+        return np.array(pts) if pts else np.zeros((0, 3))
+    for lst in (roads, rails):
+        nb = ends_of(lst)
+        for r in lst:
+            if not r.get("b"):
+                continue
+            hs = []
+            for k in (0, -1):
+                x, z = r["p"][k]
+                h = None
+                if len(nb):
+                    d = (nb[:, 0] - x) ** 2 + (nb[:, 1] - z) ** 2
+                    i = int(np.argmin(d))
+                    if d[i] < 6 ** 2:
+                        h = float(nb[i, 2])
+                if h is None:
+                    h = sample_height(dem, hmin, x, z)
+                hs.append(h)
+            n = len(r["p"])
+            prof = np.array([hs[0] + (hs[1] - hs[0]) * i / max(1, n - 1) for i in range(n)])
+            # uprostřed musí být most nad vodou -> mírné prohnutí nahoru
+            lo = min(water_h(x, z) for x, z in r["p"]) + 1.3
+            mid = np.sin(np.linspace(0, np.pi, n))
+            if prof.min() < lo:
+                prof += (lo - prof.min()) * mid / max(mid.max(), 1e-6)
+            r["h"] = [round(float(v), 2) for v in prof]
+
+
 def flatten(dem, hmin, roads, buildings, rails=()):
     xs, zs = grid_xz(dem)
     res = xs[1] - xs[0]
@@ -634,19 +671,32 @@ def build_osm(refresh, dem, hmin):
                 garden += 1
     print("stromy v zahradách", garden)
 
-    # odstraň stromy na silnicích a v domech (zhruba)
-    road_cells = set()
-    for r in roads + rails:
-        if r.get("t") in ("footway", "path", "steps"):
-            continue
-        p = r["p"]
+    # odstraň stromy na silnicích, chodnících, kolejích a ve vodě (podle skutečné šířky)
+    segs = {}
+    def add_line(p, half):
         for i in range(len(p) - 1):
             (x1, z1), (x2, z2) = p[i], p[i + 1]
-            L = math.hypot(x2 - x1, z2 - z1)
-            for k in range(int(L // 2) + 1):
-                f = k * 2 / L if L else 0
-                road_cells.add((int((x1 + (x2 - x1) * f) // 3), int((z1 + (z2 - z1) * f) // 3)))
-    trees = [tr for tr in trees if (int(tr[0] // 3), int(tr[1] // 3)) not in road_cells]
+            for ci in range(int((min(x1, x2) - half) // 10), int((max(x1, x2) + half) // 10) + 1):
+                for cj in range(int((min(z1, z2) - half) // 10), int((max(z1, z2) + half) // 10) + 1):
+                    segs.setdefault((ci, cj), []).append((x1, z1, x2, z2, half))
+    for r in roads:
+        add_line(r["p"], r["w"] / 2 + 1.6)
+    for r in rails:
+        add_line(r["p"], 3.2)
+    for w in water_lines:
+        add_line(w["p"], w["w"] / 2 + 1.2)
+
+    def blocked(x, z):
+        for x1, z1, x2, z2, half in segs.get((int(x // 10), int(z // 10)), ()):
+            ex, ez = x2 - x1, z2 - z1
+            L2 = ex * ex + ez * ez or 1
+            t = max(0.0, min(1.0, ((x - x1) * ex + (z - z1) * ez) / L2))
+            if (x - x1 - ex * t) ** 2 + (z - z1 - ez * t) ** 2 < half * half:
+                return True
+        return False
+    before = len(trees)
+    trees = [tr for tr in trees if not blocked(tr[0], tr[1])]
+    print(f"odstraněno {before - len(trees)} stromů z cest a vody")
 
     print(f"silnice {len(roads)}, budovy {len(buildings)}, plochy {len(areas)}, "
           f"vodní toky {len(water_lines)}, stromy {len(trees)} (les {forest_trees}), místa {len(pois)}")
@@ -713,6 +763,7 @@ def main():
     dem = carve_water(dem, hmin, water)
     road_profiles(roads, rails, dem, hmin, water_sampler(water))
     dem = flatten(dem, hmin, roads, buildings, rails)
+    fix_bridges(roads, rails, dem, hmin, water_sampler(water))
     # výšky domů a cest podle srovnaného terénu
     for b in buildings:
         ground = [sample_height(dem, hmin, x, z) for x, z in b["p"]]

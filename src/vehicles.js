@@ -303,20 +303,25 @@ export class Vehicle {
 
     this.speed = this.vx * nfx + this.vz * nfz;
 
-    // svislý pohyb: skoky přes hrany, dopady
+    // svislý pohyb: drží se země; dolů (z mostu do potoka) padá, nahoru nevyskakuje
     const g = this.world.ground(this.pos.x, this.pos.z, this.y);
     this.onBridge = g.bridge;
-    this.vy -= 22 * dt;
-    this.y += this.vy * dt;
-    if (this.y <= g.h) {
-      const groundRate = (g.h - this.lastGround) / Math.max(dt, 1e-4);
+    if (g.h >= this.y - 0.05) {
       if (this.air > 0.25 && this.vy < -5) this.landed = Math.min(1, -this.vy / 14);
-      this.y = g.h;
-      // výjezd z rampy -> rychlost nahoru (omezená, ať to nevystřelí na Měsíc)
-      this.vy = Math.min(Math.max(groundRate, 0), 9 * (P.springy || 0.7));
+      // plynule nahoru (žádné cukání na hranách)
+      this.y = g.h - this.y > 1.5 ? g.h : this.y + (g.h - this.y) * Math.min(1, dt * 25);
+      if (this.y < g.h - 0.02) this.y = Math.max(this.y, g.h - 0.15);
+      this.vy = 0;
       this.air = 0;
-    } else if (this.y - g.h > 0.05) {
-      this.air += dt;
+    } else {
+      // pod námi je díra (konec mostu, sráz) – gravitace, ale jen když je to opravdu hodně dolů
+      if (this.y - g.h > 0.6 || this.air > 0) {
+        this.vy -= 22 * dt;
+        this.y = Math.max(g.h, this.y + this.vy * dt);
+        this.air += dt;
+      } else {
+        this.y = g.h; this.vy = 0; this.air = 0;
+      }
     }
     this.lastGround = g.h;
     this.updateVisual(dt);
