@@ -29,11 +29,20 @@
     #start-kart { background: var(--accent); }
     #start-tractor { background: var(--green); }
     #start-moto { background: #f07a1a; }
+    #start-meadow { margin-top: 12px; width: 100%; border: 0; border-radius: 16px; padding: 14px; font-size: 17px; font-weight: 700;
+      background: #6a8f3a; color: #fff; cursor: pointer; box-shadow: 0 4px 0 rgba(0,0,0,0.2); }
+    #prompt, #task { position: absolute; left: 50%; transform: translateX(-50%); background: var(--ui); border-radius: 999px;
+      padding: 8px 18px; font-weight: 700; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; }
+    #prompt { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 8px); }
+    #task { top: max(12px, env(safe-area-inset-top)); font-size: 17px; }
+    #prompt.show, #task.show { opacity: 1; }
+    body.touch #prompt { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 110px); }
     @media (max-width: 420px) { .choices button { font-size: 15px; padding: 14px 4px; } .choices .big { font-size: 38px; } }
     .help { margin-top: 18px; font-size: 14px; line-height: 1.6; opacity: 0.85; }
     .help kbd { background: #fff; border: 1px solid #ccd; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; font-size: 12px; }
     body.touch .help .keys { display: none; }
     body:not(.touch) .help .touchhelp { display: none; }
+    body:not(.touch) .touch-only { display: none; }
     .spinner { font-size: 56px; animation: bob 1s ease-in-out infinite; }
     @keyframes bob { 50% { transform: translateY(-8px) rotate(-4deg); } }
 
@@ -103,13 +112,15 @@
         <button id="start-moto" data-start="moto"><span class="big">🏍️</span>Krosska</button>
         <button id="start-tractor" data-start="tractor"><span class="big">🚜</span>Traktor</button>
       </div>
+      <button id="start-meadow" data-start="meadow"><span>🌾🌲</span> Na louky a do lesa (pěšky)</button>
       <div class="help">
         <div class="keys">
           <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> nebo <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> jízda ·
           <kbd>mezerník</kbd> smyk · <kbd>H</kbd> houkačka<br>
+          <kbd>F</kbd> / pravé tlačítko vystoupit a nastoupit · <kbd>E</kbd> / levé tlačítko akce · myš rozhlížení · <kbd>Shift</kbd> běh<br>
           <kbd>T</kbd> přesednout (motokára → krosska → traktor) · <kbd>C</kbd> kamera · <kbd>R</kbd> zpátky na cestu · <kbd>N</kbd> celá mapa · <kbd>M</kbd> zvuk
         </div>
-        <div class="touchhelp">Vlevo zatáčíš, vpravo plyn a brzda. Nahoře vpravo přesedneš, změníš kameru nebo zatroubíš.</div>
+        <div class="touchhelp">Vlevo zatáčíš, vpravo plyn a brzda. Tažením prstu se rozhlížíš. 🚶 vystoupíš a nastoupíš, ✋ uděláš akci (pila, poleno…).</div>
       </div>
     </div>
   </div>
@@ -118,6 +129,8 @@
     <div id="info" class="panel"><div id="vehicle-name">Motokára</div><div id="place">🏡 Šumice</div></div>
     <canvas id="minimap" width="340" height="340" data-action="map" title="Celá mapa (N)"></canvas>
     <div id="tools">
+      <button data-action="exit" title="Vystoupit / nastoupit (F, pravé tlačítko)">🚶</button>
+      <button data-action="action" class="touch-only" title="Akce (E, levé tlačítko)">✋</button>
       <button data-action="switch" title="Přesednout (T)">🔄</button>
       <button data-action="horn" title="Houkačka (H)">📯</button>
       <button data-action="camera" title="Kamera (C)">🎥</button>
@@ -126,6 +139,8 @@
     </div>
     <div id="speedo" class="panel"><div id="speed">0</div><small>km/h</small></div>
     <div id="toast"></div>
+    <div id="prompt"></div>
+    <div id="task"></div>
     <div id="pad-steer" class="pad">
       <button data-hold="left" aria-label="Doleva">◀</button>
       <button data-hold="right" aria-label="Doprava">▶</button>

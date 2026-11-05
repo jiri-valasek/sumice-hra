@@ -9,7 +9,10 @@ Stačí otevřít `index.html` přes webový server (nebo GitHub Pages). Nic se 
 
 | Akce | Klávesnice | Tablet / mobil |
 |---|---|---|
-| Jízda | šipky nebo WASD | ◀ ▶ vlevo, ⏫ ⏬ vpravo |
+| Jízda / chůze | šipky nebo WASD (Shift = běh) | ◀ ▶ vlevo, ⏫ ⏬ vpravo |
+| Vystoupit / nastoupit | F nebo pravé tlačítko myši | 🚶 |
+| Akce (vzít pilu, kácet, zvednout a položit poleno) | E nebo levé tlačítko myši | ✋ |
+| Rozhlížení | myš (klikni do hry) | tažení prstem |
 | Smyk (ruční brzda) | mezerník | – |
 | Přesednout (motokára → krosska → traktor) | T | 🔄 |
 | Houkačka | H | 📯 |
@@ -17,6 +20,10 @@ Stačí otevřít `index.html` přes webový server (nebo GitHub Pages). Nic se 
 | Zpátky na cestu | R | 📍 |
 | Celá mapa | N | klepnout na minimapu |
 | Zvuk | M | 🔊 |
+
+## Práce na louce a v lese
+
+Nad obecními rybníky jsou louky a les. Na louce stojí **traktor se sekačkou**: nasedni a poseč louku (ukazuje se, kolik procent je hotovo, na konci jsou balíky sena). V lese leží na pařezu **motorová pila**: vezmi ji, pokácej stromy, polena odnes na **hromadu dřeva**. Zóny se nastavují v `tools/build_data.py` (`MEADOW_ZONE`, `FOREST_ZONE`).
 
 ## Lokální spuštění
 
@@ -45,6 +52,8 @@ Výřez mapy (souřadnice) se nastavuje na začátku skriptu.
 - `src/world.js`: terén, malovaný povrch, silnice, budovy, stromy, popisky a kolize
 - `src/vehicles.js`: modely vozidel a jízdní fyzika
 - `src/train.js`: vláček na trati
+- `src/player.js`: chůze pěšky
+- `src/activities.js`: kosení louky a kácení v lese
 - `src/traffic.js`: auta a chodci (graf silnic a chodníků z OSM)
 - `src/input.js`: klávesnice a dotyk
 - `src/audio.js`: syntetizovaný zvuk motoru a houkačka

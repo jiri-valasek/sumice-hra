@@ -32,6 +32,7 @@ export class Sound {
 
   setEngine(cfg, speedRatio, throttle) {
     if (!this.ctx) return;
+    if (!cfg) { this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1); return; }
     const t = this.ctx.currentTime;
     this.osc1.type = cfg.type;
     const f = cfg.base + cfg.range * Math.min(1.2, Math.abs(speedRatio)) + (throttle ? 12 : 0);
@@ -99,6 +100,50 @@ export class Sound {
       const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
       const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
       o.connect(lp).connect(g); o.start(t); o.stop(t + 1.5);
+    }
+  }
+
+  click() {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle'; o.frequency.setValueAtTime(660, t); o.frequency.exponentialRampToValueAtTime(990, t + 0.08);
+    g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    o.connect(g).connect(this.master); o.start(t); o.stop(t + 0.13);
+  }
+
+  thud() { this.bump(1); this.bump(0.8); }
+
+  fanfare() {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    [523, 659, 784, 1047].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t + i * 0.12); g.gain.linearRampToValueAtTime(0.12, t + i * 0.12 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + (i === 3 ? 0.6 : 0.2));
+      o.connect(g).connect(this.master); o.start(t + i * 0.12); o.stop(t + i * 0.12 + 0.7);
+    });
+  }
+
+  chainsaw(on) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    if (on && !this.saw && !this.muted) {
+      const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+      o.type = 'sawtooth'; o.frequency.value = 120; o2.type = 'square'; o2.frequency.value = 241;
+      f.type = 'bandpass'; f.frequency.value = 1500; f.Q.value = 0.8;
+      g.gain.value = 0;
+      g.gain.linearRampToValueAtTime(0.22, t + 0.1);
+      o.frequency.linearRampToValueAtTime(190, t + 0.3);
+      o.connect(f); o2.connect(f); f.connect(g).connect(this.master);
+      o.start(); o2.start();
+      this.saw = { o, o2, g };
+    } else if (!on && this.saw) {
+      const { o, o2, g } = this.saw;
+      g.gain.linearRampToValueAtTime(0, t + 0.15);
+      o.stop(t + 0.2); o2.stop(t + 0.2);
+      this.saw = null;
     }
   }
 

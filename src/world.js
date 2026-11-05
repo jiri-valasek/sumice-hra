@@ -786,6 +786,7 @@ export function buildTrees(map, terrain) {
   const geos = treeGeometries();
   const groups = [[], [], [], [], []];
   for (const t of map.trees) groups[t[2]].push(t);
+  const handles = [];
   const meshes = [];
   const colliders = [];
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
@@ -796,7 +797,7 @@ export function buildTrees(map, terrain) {
     if (!list.length) return;
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
     const im = new THREE.InstancedMesh(geos[kind], mat, list.length);
-    list.forEach(([x, z, , sc], i) => {
+    list.forEach(([x, z, , sc, cut], i) => {
       p.set(x, terrain.height(x, z) - 0.15, z);
       q.setFromAxisAngle(up, rnd() * Math.PI * 2);
       s.setScalar(sc);
@@ -804,17 +805,19 @@ export function buildTrees(map, terrain) {
       im.setMatrixAt(i, m4);
       col.setHSL(0, 0, 1).offsetHSL((rnd() - 0.5) * 0.06, (rnd() - 0.5) * 0.2, (rnd() - 0.5) * 0.18);
       im.setColorAt(i, col);
-      if (kind !== 3) colliders.push([x, z, 0.35 * sc + 0.15]);
+      const h = { x, z, kind, scale: sc, mesh: im, index: i, cut: !!cut, standing: true };
+      handles.push(h);
+      if (kind !== 3) colliders.push([x, z, 0.35 * sc + 0.15, h]);
     });
     im.castShadow = true;
     im.receiveShadow = false;
     meshes.push(im);
   });
-  return { meshes, colliders };
+  return { meshes, colliders, handles };
 }
 
 // ------------------------------------------------------------ popisky
-const POI_ICON = { pumptrack: '🚲', halt: '🚉', kindergarten: '🧸', mill: '⚙️', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
+const POI_ICON = { saw: '🪚', pile: '🪵', meadow: '🌾', mower: '🚜', pumptrack: '🚲', halt: '🚉', kindergarten: '🧸', mill: '⚙️', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
 const POI_SKIP = new Set(['parcel_locker', 'static_caravan']);
 
 export function buildLabels(map, terrain) {
@@ -859,7 +862,11 @@ export class Colliders {
       for (const [x, z] of p) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
       this.add({ poly: p }, x0, z0, x1, z1);
     }
-    for (const [x, z, r] of circles) this.add({ x, z, r }, x - r, z - r, x + r, z + r);
+    for (const [x, z, r, h] of circles) {
+      const it = { x, z, r };
+      if (h) h.col = it; // strom ke kácení: po pokácení srážku vypneme
+      this.add(it, x - r, z - r, x + r, z + r);
+    }
   }
   add(item, x0, z0, x1, z1) {
     const c = this.cell;
@@ -872,7 +879,7 @@ export class Colliders {
     }
   }
   // posune kruh (pos {x,z}, poloměr R) ven z překážek; vrací normálu nárazu nebo null
-  resolve(pos, R) {
+  resolve(pos, R, ignore = null) {
     const c = this.cell;
     let hit = null;
     const seen = new Set();
@@ -889,12 +896,32 @@ export class Colliders {
       }
     }
     for (const d of this.dynamic) {
+      if (d === ignore) continue;
       if (Math.abs(d.cx - pos.x) > d.r + R || Math.abs(d.cz - pos.z) > d.r + R) continue;
       const n = d.circle ? this.circle(d, pos, R) : this.poly(d.poly, pos, R);
       if (n) { hit = n; hit.dynamic = d; }
     }
     return hit;
   }
+  // je bod uvnitř koruny stromu nebo budovy? (pro kameru)
+  blocked(x, z, crown = 5) {
+    const c = this.cell;
+    const items = this.grid.get(Math.floor(x / c) * 100003 + Math.floor(z / c));
+    if (!items) return false;
+    for (const it of items) {
+      if (it.poly) {
+        let inside = false;
+        const p = it.poly;
+        for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+          const [x1, z1] = p[j], [x2, z2] = p[i];
+          if ((z1 > z) !== (z2 > z) && x < ((x2 - x1) * (z - z1)) / (z2 - z1) + x1) inside = !inside;
+        }
+        if (inside) return true;
+      } else if (it.r > 0 && (x - it.x) ** 2 + (z - it.z) ** 2 < (it.r * crown) ** 2) return true;
+    }
+    return false;
+  }
+
   circle(it, pos, R) {
     const dx = pos.x - it.x, dz = pos.z - it.z;
     const d = Math.hypot(dx, dz), m = R + it.r;

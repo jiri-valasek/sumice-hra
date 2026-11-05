@@ -22,7 +22,7 @@ OUT = os.path.join(ROOT, "data")
 
 # Herní výřez: Šumice + pole kolem (WGS84)
 LON_MIN, LON_MAX = 17.700, 17.745
-LAT_MIN, LAT_MAX = 49.021, 49.043
+LAT_MIN, LAT_MAX = 49.021, 49.0485  # na severu až k loukám a lesu nad rybníky
 DEM_RES = 5.0  # metrů na pixel výškového modelu
 
 LAT0 = (LAT_MIN + LAT_MAX) / 2
@@ -407,6 +407,22 @@ PIPED_STREAMS = {
     "81886238": 45,  # bezejmenný potok od Ovčírky ulicí k severovýchodu – v obci sveden do potrubí (cca 60. léta)
 }
 
+# Herní zóny nad rybníky (podle obtažení na Mapy.cz). Kotva = křížení cest u malého rybníka.
+ZONE_ANCHOR = (49.0429, 17.7248)
+# (metry na východ, metry na sever) od kotvy
+MEADOW_ZONE = [(-49, 250), (-39, 247), (-33, 197), (10, 125), (15, 102), (0, 72), (-53, 92), (-82, 91), (-56, 197), (-53, 250)]
+FOREST_ZONE = [(7, 441), (36, 438), (63, 414), (79, 365), (77, 322), (69, 263), (63, 210), (36, 197), (-3, 224),
+               (16, 270), (10, 309), (3, 329), (23, 368), (20, 401), (7, 431)]
+TRACTOR_SPOT = (-8, 78, 0.0)     # traktor se sekačkou (x, z, směr: 0 = sever)
+SAW_SPOT = (52, 196)             # stojan s motorovou pilou
+PILE_SPOT = (58, 182)            # sem se skládá dřevo
+
+
+def anchor_local(dx, dn):
+    la = ZONE_ANCHOR[0] + dn / M_PER_DEG_LAT
+    lo = ZONE_ANCHOR[1] + dx / M_PER_DEG_LON
+    return list(proj(la, lo))
+
 # Dominanty obce – vzhled podle virtuální prohlídky na sumice.cz (OSM id budovy -> styl, popisek, počet pater)
 LANDMARKS = {
     "36998573": ("church", None, None),
@@ -665,7 +681,7 @@ def build_osm(refresh, dem, hmin):
     # stromy v lesích, sadech a křovinách
     forest_trees = 0
     for a in areas:
-        dens = {"forest": 70.0, "orchard": 9.0, "scrub": 120.0}.get(a["c"])
+        dens = {"forest": 105.0, "orchard": 9.0, "scrub": 120.0}.get(a["c"])
         if not dens:
             continue
         for ring in a["p"]:
@@ -800,8 +816,23 @@ def build_osm(refresh, dem, hmin):
             if (x - x1 - ex * t) ** 2 + (z - z1 - ez * t) ** 2 < half * half:
                 return True
         return False
-    # ani v rybnících a na hřištích stromy nerostou
-    clear = [a["p"][0] for a in areas if a["c"] in ("water", "pitch", "playground", "pumptrack")]
+    # les ke kácení: hustý porost (poslední prvek 1 = dá se pokácet)
+    forest_ring = [anchor_local(dx, dn) for dx, dn in FOREST_ZONE]
+    xs = [x for x, _ in forest_ring]; zs = [z for _, z in forest_ring]
+    trees[:] = [tr for tr in trees if not points_in_poly(np.array([tr[0]]), np.array([tr[1]]), forest_ring)[0]]
+    n = int((max(xs) - min(xs)) * (max(zs) - min(zs)) / 32)
+    px = np.array([rnd.uniform(min(xs), max(xs)) for _ in range(n)])
+    pz = np.array([rnd.uniform(min(zs), max(zs)) for _ in range(n)])
+    ins = points_in_poly(px, pz, forest_ring)
+    cut = 0
+    for x, z in zip(px[ins], pz[ins]):
+        trees.append([round(float(x), 1), round(float(z), 1), 4 if rnd.random() < 0.4 else 1, round(rnd.uniform(0.85, 1.25), 2), 1])
+        cut += 1
+    print("stromy ke kácení", cut)
+
+    # ani v rybnících, na hřištích a na louce ke kosení stromy nerostou
+    meadow_ring = [anchor_local(dx, dn) for dx, dn in MEADOW_ZONE]
+    clear = [a["p"][0] for a in areas if a["c"] in ("water", "pitch", "playground", "pumptrack")] + [meadow_ring]
     if clear:
         tx = np.array([tr[0] for tr in trees]); tz = np.array([tr[1] for tr in trees])
         bad = np.zeros(len(trees), dtype=bool)
@@ -903,6 +934,13 @@ def main():
         "pois": pois,
         "trees": trees,
         "rails": rails,
+        "zones": {
+            "meadow": [anchor_local(dx, dn) for dx, dn in MEADOW_ZONE],
+            "forest": [anchor_local(dx, dn) for dx, dn in FOREST_ZONE],
+            "tractor": anchor_local(*TRACTOR_SPOT[:2]) + [TRACTOR_SPOT[2]],
+            "saw": anchor_local(*SAW_SPOT),
+            "pile": anchor_local(*PILE_SPOT),
+        },
         "ponds": [{"p": a["p"][0], "h": a["h"]} for a in areas if a.get("pond") and "h" in a],
         "pitches": [{"c": a["c"], "sp": a.get("sp"), "su": a.get("su"), "p": a["p"][0]} for a in areas
                     if a["c"] in ("pitch", "playground", "pumptrack") and in_bounds(*centroid(a["p"][0]))],

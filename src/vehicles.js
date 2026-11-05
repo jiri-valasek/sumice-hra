@@ -162,6 +162,20 @@ function motoModel() {
   return { group: g, wheels, tilt };
 }
 
+function mowerModel() {
+  const m = tractorModel();
+  const red = mat('#c0392b'), steel = mat('#9aa0a6');
+  // boční žací lišta (vpravo za předními koly)
+  const bar = new THREE.Group();
+  bar.add(box(2.4, 0.12, 0.35, red, -2.2, 0.25, 0.2));
+  bar.add(box(2.3, 0.05, 0.5, steel, -2.2, 0.15, 0.25));
+  bar.add(box(0.2, 0.6, 0.2, red, -1.1, 0.5, 0.2));
+  const arm = box(1.2, 0.1, 0.1, red, -0.8, 0.85, 0.2); arm.rotation.z = -0.35; bar.add(arm);
+  m.group.add(bar);
+  m.cutPoint = new THREE.Vector3(-1.6, 0, 0.2); // střed záběru (lokálně)
+  return m;
+}
+
 // ------------------------------------------------------------ fyzika
 export const VEHICLES = {
   kart: {
@@ -178,6 +192,13 @@ export const VEHICLES = {
     surf: { [SURF.PAVED]: 1, [SURF.DIRT]: 0.95, [SURF.GRASS]: 0.85, [SURF.FIELD]: 0.75, [SURF.WATER]: 0.4 },
     cam: { dist: 5.5, height: 2.4, look: 1.2 }, engine: { base: 95, range: 260, type: 'sawtooth' },
     lean: true, springy: 1.2,
+  },
+  mower: {
+    name: 'Traktor se sekačkou', model: mowerModel, radius: 1.7, wheelbase: 2.2,
+    maxSpeed: 7, reverse: 3, accel: 2.8, brake: 8, drag: 0.35, grip: 9, driftGrip: 4,
+    steerMax: 0.65, steerRate: 2.4, maxYaw: 1.3,
+    surf: { [SURF.PAVED]: 1, [SURF.DIRT]: 1, [SURF.GRASS]: 1, [SURF.FIELD]: 0.95, [SURF.WATER]: 0.5 },
+    cam: { dist: 9, height: 5, look: 1.8 }, engine: { base: 30, range: 50, type: 'square' },
   },
   tractor: {
     name: 'Traktor', model: tractorModel, radius: 1.7, wheelbase: 2.2,
@@ -200,6 +221,9 @@ export class Vehicle {
     this.wheels = m.wheels;
     this.exhaustTop = m.exhaustTop;
     this.tilt = m.tilt || null;
+    this.cutPoint = m.cutPoint || null;
+    // srážkový obrys, když vozidlo stojí zaparkované
+    this.dyn = { poly: [[0, 0], [0, 0], [0, 0], [0, 0]], cx: 1e9, cz: 1e9, r: 4, vx: 0, vz: 0 };
     this.vy = 0;
     this.air = 0;      // jak dlouho je ve vzduchu
     this.onBridge = false;
@@ -281,7 +305,7 @@ export class Vehicle {
     this.pos.z += this.vz * dt;
 
     // srážky
-    const hit = this.world.colliders.resolve(this.pos, P.radius);
+    const hit = this.world.colliders.resolve(this.pos, P.radius, this.dyn);
     if (hit) {
       const vn = this.vx * hit.x + this.vz * hit.z;
       if (vn < 0) {
@@ -343,6 +367,15 @@ export class Vehicle {
     let shake = 0;
     if (this.surface !== SURF.PAVED && Math.abs(this.speed) > 1) shake = (Math.random() - 0.5) * 0.05 * Math.min(1, Math.abs(this.speed) / 8);
     this.group.position.set(this.pos.x, this.y + shake, this.pos.z);
+    {
+      const r = this.p.radius * 0.9, fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+      const L = r * 1.25, Wd = r * 0.75, d = this.dyn;
+      d.cx = this.pos.x; d.cz = this.pos.z;
+      d.poly[0] = [this.pos.x + fx * L + fz * Wd, this.pos.z + fz * L - fx * Wd];
+      d.poly[1] = [this.pos.x + fx * L - fz * Wd, this.pos.z + fz * L + fx * Wd];
+      d.poly[2] = [this.pos.x - fx * L - fz * Wd, this.pos.z - fz * L + fx * Wd];
+      d.poly[3] = [this.pos.x - fx * L + fz * Wd, this.pos.z - fz * L - fx * Wd];
+    }
 
     this.wheelSpin += (this.speed * dt);
     if (this.tilt) {

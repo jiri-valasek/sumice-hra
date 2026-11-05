@@ -222,7 +222,8 @@ export class Traffic {
       const dist = Math.hypot(dx, dz);
       // vozidlo blízko -> uhni stranou a počkej
       let v = h.v;
-      if (dist < 7) {
+      const near = player.kind === 'walk' ? 1.6 : 7;
+      if (dist < near) {
         const side = (dx * -here.fz + dz * here.fx) > 0 ? -1 : 1; // na opačnou stranu, než jede hráč
         h.side = side * 2.6; h.sideT = 2.5; v = 0;
       } else if (h.sideT > 0) { h.sideT -= dt; v = h.v * 0.4; }
@@ -237,7 +238,7 @@ export class Traffic {
       const x = cur.x === 0 && cur.z === 0 ? tx : cur.x + (tx - cur.x) * k;
       const z = cur.x === 0 && cur.z === 0 ? tz : cur.z + (tz - cur.z) * k;
       h.m.g.position.set(x, G(x, z).h, z);
-      const yaw = dist < 7 ? Math.atan2(dx, dz) : Math.atan2(p.fx * (h.w.fwd ? 1 : 1), p.fz);
+      const yaw = dist < near ? Math.atan2(dx, dz) : Math.atan2(p.fx * (h.w.fwd ? 1 : 1), p.fz);
       h.m.g.rotation.y += (((yaw - h.m.g.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 8);
       h.m.g.visible = dist < 450;
       // chůze
