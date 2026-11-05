@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Terrain, paintGround, buildRoads, buildBuildings, buildTrees, buildLabels, Colliders, nearestRoadPoint, SURF,
-  Bridges, buildBridgeMeshes, buildWater, buildRails } from './world.js';
+  Bridges, buildBridgeMeshes, buildWater, buildRails, buildPonds, buildProps } from './world.js';
+import { Traffic } from './traffic.js';
 import { Train } from './train.js';
 import { Vehicle, VEHICLES } from './vehicles.js';
 import { Input } from './input.js';
@@ -89,9 +90,15 @@ async function load() {
   status('Sázím stromy…'); await nextFrame();
   const t = buildTrees(map, world.terrain);
   t.meshes.forEach((m) => scene.add(m));
-  world.colliders = new Colliders(b.colliders, t.colliders);
+  buildPonds(map).forEach((m) => scene.add(m));
+  const props = buildProps(map, world.terrain);
+  props.meshes.forEach((m) => scene.add(m));
+  world.colliders = new Colliders(b.colliders, [...t.colliders, ...props.circles]);
   world.train = new Train(map, scene, world.colliders, map.pois.find((p) => p.k === 'halt'));
   world.train.onHorn = (d) => sound.trainHorn(d);
+  status('Posílám do ulic lidi a auta…'); await nextFrame();
+  world.traffic = new Traffic(map, world, scene, LOW_POWER ? { cars: 5, people: 15 } : {});
+  world.traffic.onHonk = (d) => { if (d < 80) sound.horn(false); };
 
   labels = buildLabels(map, world.terrain);
   scene.add(labels.group);
@@ -271,7 +278,7 @@ function tick(dt, inp) {
   if (input.take('switch')) useVehicle({ kart: 'moto', moto: 'tractor', tractor: 'kart' }[active.kind]);
   if (input.take('camera')) { camMode = (camMode + 1) % CAM_MODES.length; toast('🎥 ' + CAM_MODES[camMode]); }
   if (input.take('reset')) resetToRoad();
-  if (input.take('horn')) sound.horn(active.kind === 'tractor');
+  if (input.take('horn')) { sound.horn(active.kind === 'tractor'); world.traffic.horn(active); }
   if (input.take('mute')) { const m = sound.toggleMute(); $('#btn-mute').textContent = m ? '🔇' : '🔊'; }
   if (input.take('map')) miniBig = !miniBig;
 
@@ -281,6 +288,7 @@ function tick(dt, inp) {
   if (active.bump > 0.3) { sound.bump(active.bump); active.bump = 0.29; }
   if (active.landed > 0) { sound.bump(active.landed); active.landed = 0; }
   world.train.update(dt, active);
+  world.traffic.update(dt, active);
   if (world.water.userData.flow) world.water.userData.flow.offset.y -= dt * 0.35;
   updateSplash(dt, active);
   sound.setEngine(active.p.engine, active.speed / active.p.maxSpeed, inp.throttle !== 0);

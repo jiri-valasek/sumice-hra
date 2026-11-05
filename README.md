@@ -1,7 +1,7 @@
 # Šumice 🚜🏎️
 
 Projížďka po Šumicích (okres Uherské Hradiště) na motokáře, krossce nebo traktoru, v prohlížeči.
-Vesnice je postavená ze skutečných mapových dat: silnice, mosty, domy, pole, sady, lesy, potoky, železnice i kopce sedí s realitou. Po trati jezdí vláček a staví na zastávce Šumice.
+Vesnice je postavená ze skutečných mapových dat: silnice, mosty, domy, pole, sady, lesy, potoky, železnice i kopce sedí s realitou. Po trati jezdí vláček a staví na zastávce Šumice. Po silnicích jezdí auta, po chodnících chodí lidé, u rybníků sedí rybáři a jsou tu hřiště (fotbal, tenis, dětské hřiště, pumptrack).
 
 ## Hraní
 
@@ -45,6 +45,7 @@ Výřez mapy (souřadnice) se nastavuje na začátku skriptu.
 - `src/world.js`: terén, malovaný povrch, silnice, budovy, stromy, popisky a kolize
 - `src/vehicles.js`: modely vozidel a jízdní fyzika
 - `src/train.js`: vláček na trati
+- `src/traffic.js`: auta a chodci (graf silnic a chodníků z OSM)
 - `src/input.js`: klávesnice a dotyk
 - `src/audio.js`: syntetizovaný zvuk motoru a houkačka
 - `src/main.js`: hlavní smyčka, kamera a minimapa

@@ -95,6 +95,43 @@ def build_heights(refresh):
     return {"w": w, "h": h, "min": hmin, "scale": 0.01, "file": "heights.bin"}, a, hmin
 
 
+def grid_mask(dem, ring):
+    xs, zs = grid_xz(dem)
+    rx = [x for x, _ in ring]; rz = [z for _, z in ring]
+    i0 = max(0, int(np.searchsorted(xs, min(rx))) - 1); i1 = min(len(xs), int(np.searchsorted(xs, max(rx))) + 1)
+    j0 = max(0, int(np.searchsorted(zs, min(rz))) - 1); j1 = min(len(zs), int(np.searchsorted(zs, max(rz))) + 1)
+    if i1 <= i0 or j1 <= j0:
+        return None
+    gx, gz = np.meshgrid(xs[i0:i1], zs[j0:j1])
+    ins = points_in_poly(gx.ravel(), gz.ravel(), ring).reshape(gx.shape)
+    return (slice(j0, j1), slice(i0, i1)), ins
+
+
+def ponds_and_pitches(dem, hmin, areas):
+    """Rybníky: rovná hladina a dno pod ní. Hřiště: rovná plocha."""
+    out = dem.copy()
+    for a in areas:
+        if a["c"] == "water" and a.get("pond"):
+            ring = a["p"][0]
+            shore = np.array([sample_height(dem, hmin, x, z) for x, z in densify(ring, 3.0)])
+            level = float(np.percentile(shore, 15)) - 0.35
+            a["h"] = round(level, 2)
+            gm = grid_mask(out, ring)
+            if gm:
+                sl, ins = gm
+                sub = out[sl]
+                sub[ins] = np.minimum(sub[ins], level + hmin - 0.8)
+        elif a["c"] in ("pitch", "playground", "pumptrack"):
+            ring = a["p"][0]
+            gm = grid_mask(out, ring)
+            if gm:
+                sl, ins = gm
+                if ins.any():
+                    sub = out[sl]
+                    sub[ins] = np.median(sub[ins])
+    return out
+
+
 def write_heights(dem, hmin):
     q = np.clip(np.round((dem - hmin) * 100), 0, 65535).astype("<u2")  # centimetry nad minimem
     with open(os.path.join(OUT, "heights.bin"), "wb") as f:
@@ -352,6 +389,7 @@ AREA_CLASS = [
     ("landuse", "meadow", "meadow"), ("natural", "grassland", "meadow"),
     ("landuse", "grass", "grass"), ("leisure", "park", "grass"), ("landuse", "village_green", "grass"),
     ("leisure", "pitch", "pitch"), ("leisure", "playground", "playground"),
+    ("leisure", "track", "pumptrack"),
     ("landuse", "cemetery", "cemetery"), ("amenity", "grave_yard", "cemetery"),
     ("landuse", "farmyard", "farmyard"), ("landuse", "industrial", "industrial"),
     ("landuse", "allotments", "garden"), ("leisure", "garden", "garden"),
@@ -568,8 +606,22 @@ def build_osm(refresh, dem, hmin):
 
         c = area_class(t)
         if c and closed:
-            areas.append({"c": c, "id": int(wid) % 997, "p": [p[:-1]]})
+            ar = {"c": c, "id": int(wid) % 997, "p": [p[:-1]]}
+            if t.get("sport"):
+                ar["sp"] = t["sport"]
+            if t.get("surface"):
+                ar["su"] = t["surface"]
+            areas.append(ar)
             add_poi(t, *centroid(p[:-1]))
+            if c == "pumptrack":
+                cx, cz = centroid(p[:-1])
+                pois.append({"n": "Pumptrack", "k": "pumptrack", "x": round(cx, 1), "z": round(cz, 1)})
+            if c == "playground":
+                cx, cz = centroid(p[:-1])
+                pois.append({"n": "Dětské hřiště", "k": "playground", "x": round(cx, 1), "z": round(cz, 1)})
+            if c == "pitch" and t.get("sport") == "soccer":
+                cx, cz = centroid(p[:-1])
+                pois.append({"n": "Fotbalové hřiště", "k": "pitch", "x": round(cx, 1), "z": round(cz, 1)})
         elif closed:
             add_poi(t, *centroid(p[:-1]))
 
@@ -671,6 +723,31 @@ def build_osm(refresh, dem, hmin):
                 garden += 1
     print("stromy v zahradách", garden)
 
+    # husté stromy a vrby kolem rybníků (jako na leteckém snímku)
+    pond_n = 0
+    for a in areas:
+        if a["c"] != "water":
+            continue
+        ring = a["p"][0]
+        if abs(poly_area(ring)) > 30000:
+            continue
+        cx, cz = centroid(ring)
+        if not in_bounds(cx, cz):
+            continue
+        for (x1, z1), (x2, z2) in zip(ring, ring[1:] + ring[:1]):
+            L = math.hypot(x2 - x1, z2 - z1)
+            for k in range(int(L // 4.5) + 1):
+                f = k * 4.5 / L if L else 0
+                x, z = x1 + (x2 - x1) * f, z1 + (z2 - z1) * f
+                dx, dz = x - cx, z - cz
+                dl = math.hypot(dx, dz) or 1
+                off = rnd.uniform(3.0, 7.0)
+                if rnd.random() < 0.8:
+                    trees.append([round(x + dx / dl * off, 1), round(z + dz / dl * off, 1), 0, round(rnd.uniform(0.9, 1.4), 2)])
+                    pond_n += 1
+        a["pond"] = 1
+    print("stromy kolem rybníků", pond_n)
+
     # odstraň stromy na silnicích, chodnících, kolejích a ve vodě (podle skutečné šířky)
     segs = {}
     def add_line(p, half):
@@ -694,6 +771,18 @@ def build_osm(refresh, dem, hmin):
             if (x - x1 - ex * t) ** 2 + (z - z1 - ez * t) ** 2 < half * half:
                 return True
         return False
+    # ani v rybnících a na hřištích stromy nerostou
+    clear = [a["p"][0] for a in areas if a["c"] in ("water", "pitch", "playground", "pumptrack")]
+    if clear:
+        tx = np.array([tr[0] for tr in trees]); tz = np.array([tr[1] for tr in trees])
+        bad = np.zeros(len(trees), dtype=bool)
+        for ring in clear:
+            xs = [x for x, _ in ring]; zs = [z for _, z in ring]
+            near = (tx > min(xs) - 2) & (tx < max(xs) + 2) & (tz > min(zs) - 2) & (tz < max(zs) + 2)
+            if near.any():
+                idx = np.nonzero(near)[0]
+                bad[idx] |= points_in_poly(tx[idx], tz[idx], ring)
+        trees = [tr for tr, b_ in zip(trees, bad) if not b_]
     before = len(trees)
     trees = [tr for tr in trees if not blocked(tr[0], tr[1])]
     print(f"odstraněno {before - len(trees)} stromů z cest a vody")
@@ -761,6 +850,7 @@ def main():
     dem = smooth_dem(dem)
     roads, buildings, areas, water, pois, trees, rails, line = build_osm(refresh, dem, hmin)
     dem = carve_water(dem, hmin, water)
+    dem = ponds_and_pitches(dem, hmin, areas)
     road_profiles(roads, rails, dem, hmin, water_sampler(water))
     dem = flatten(dem, hmin, roads, buildings, rails)
     fix_bridges(roads, rails, dem, hmin, water_sampler(water))
@@ -784,6 +874,9 @@ def main():
         "pois": pois,
         "trees": trees,
         "rails": rails,
+        "ponds": [{"p": a["p"][0], "h": a["h"]} for a in areas if a.get("pond") and "h" in a],
+        "pitches": [{"c": a["c"], "sp": a.get("sp"), "su": a.get("su"), "p": a["p"][0]} for a in areas
+                    if a["c"] in ("pitch", "playground", "pumptrack") and in_bounds(*centroid(a["p"][0]))],
         "trainLine": train_line(line, rails),
     }
     with open(os.path.join(OUT, "map.json"), "w", encoding="utf-8") as f:

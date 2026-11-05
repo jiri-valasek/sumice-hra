@@ -263,6 +263,7 @@ export function paintGround(map, maxTex) {
     const rings = [...a.p, ...(a.holes || [])];
     let color = AREA_COLORS[a.c] || '#93c463';
     if (a.c === 'farmland') color = FIELD_COLORS[a.id % FIELD_COLORS.length];
+    if (a.c === 'water' && a.pond) color = '#3f5f52';
     ctx.save();
     path(ctx, s, rings);
     ctx.fillStyle = color;
@@ -291,6 +292,8 @@ export function paintGround(map, maxTex) {
     mctx.fillStyle = SURF_PAINT[sc];
     mctx.fill('evenodd');
   }
+
+  for (const f of map.pitches || []) paintPitch(ctx, s, f, W, H);
 
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   mctx.lineCap = 'round'; mctx.lineJoin = 'round';
@@ -357,6 +360,62 @@ export function paintGround(map, maxTex) {
     return surf[j * mask.width + i];
   };
   return { canvas, surface };
+}
+
+// ------------------------------------------------------------ hřiště (malování na zem)
+function paintPitch(ctx, s, f, W, H) {
+  const ring = f.p;
+  const box = obb(ring);
+  const { c, u, v, L, W: Wd } = box;
+  // lokální souřadnice hřiště: a podél delší osy, d napříč
+  const P = (a, d) => [(c[0] + u[0] * a + v[0] * d + W / 2) * s, (c[1] + u[1] * a + v[1] * d + H / 2) * s];
+  const poly = () => { ctx.beginPath(); ring.forEach(([x, z], i) => (i ? ctx.lineTo((x + W / 2) * s, (z + H / 2) * s) : ctx.moveTo((x + W / 2) * s, (z + H / 2) * s))); ctx.closePath(); };
+  const rect = (a0, d0, a1, d1) => { ctx.beginPath(); const q = [P(a0, d0), P(a1, d0), P(a1, d1), P(a0, d1)]; q.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); };
+  const line = (a0, d0, a1, d1) => { ctx.beginPath(); ctx.moveTo(...P(a0, d0)); ctx.lineTo(...P(a1, d1)); ctx.stroke(); };
+  const circle = (a, d, r) => { ctx.beginPath(); const [x, y] = P(a, d); ctx.arc(x, y, r * s, 0, Math.PI * 2); ctx.stroke(); };
+  ctx.save();
+  poly(); ctx.clip();
+  ctx.strokeStyle = '#f7f7f2'; ctx.lineWidth = Math.max(1, 0.14 * s * 1.6);
+  if (f.c === 'pitch' && f.sp === 'soccer') {
+    for (let a = -L, k = 0; a < L; a += 6, k++) { rect(a, -Wd, a + 6, Wd); ctx.fillStyle = k % 2 ? '#5fae4d' : '#6cbb57'; ctx.fill(); }
+    const l = L - 1.5, w = Wd - 1.5;
+    rect(-l, -w, l, w); ctx.stroke();
+    line(0, -w, 0, w);
+    circle(0, 0, Math.min(9.15, w * 0.4));
+    const pw = Math.min(20.15, w * 0.8), gw = Math.min(9.15, w * 0.4);
+    for (const e of [-1, 1]) {
+      rect(e * l, -pw, e * (l - Math.min(16.5, l * 0.3)), pw); ctx.stroke();
+      rect(e * l, -gw, e * (l - Math.min(5.5, l * 0.1)), gw); ctx.stroke();
+    }
+  } else if (f.c === 'pitch' && f.sp === 'tennis') {
+    const clay = f.su === 'clay' || !f.su;
+    poly(); ctx.fillStyle = clay ? '#c8663e' : '#3f8a55'; ctx.fill();
+    const cl = Math.min(11.885, L - 2), cw = Math.min(5.485, Wd - 1);
+    if (!clay) { rect(-cl, -cw, cl, cw); ctx.fillStyle = '#b9483a'; ctx.fill(); }
+    rect(-cl, -cw, cl, cw); ctx.stroke();
+    const sw = cw * 4.115 / 5.485, sl = cl * 6.4 / 11.885;
+    line(-cl, -sw, cl, -sw); line(-cl, sw, cl, sw);
+    line(-sl, -sw, -sl, sw); line(sl, -sw, sl, sw);
+    line(-sl, 0, sl, 0);
+  } else if (f.c === 'playground') {
+    poly(); ctx.fillStyle = '#4fae5a'; ctx.fill();
+    const rnd = hashRand(Math.round(Math.abs(c[0] * 7 + c[1])));
+    ctx.fillStyle = '#d14b3c';
+    for (let i = 0; i < 7; i++) {
+      const [x, y] = P((rnd() * 2 - 1) * L * 0.8, (rnd() * 2 - 1) * Wd * 0.8);
+      ctx.beginPath(); ctx.ellipse(x, y, (2 + rnd() * 3) * s, (1.5 + rnd() * 2) * s, rnd() * 3, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (f.c === 'pumptrack') {
+    poly(); ctx.fillStyle = '#9c8a6c'; ctx.fill();
+    ctx.strokeStyle = '#5f5e5a'; ctx.lineWidth = 2.4 * s; ctx.lineJoin = 'round';
+    poly(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(...P(-L * 0.7, -Wd * 0.4)); ctx.bezierCurveTo(...P(-L * 0.2, Wd * 0.9), ...P(L * 0.2, -Wd * 0.9), ...P(L * 0.7, Wd * 0.4)); ctx.stroke();
+  } else {
+    // obecné hřiště (hasičské…)
+    for (let a = -L, k = 0; a < L; a += 6, k++) { rect(a, -Wd, a + 6, Wd); ctx.fillStyle = k % 2 ? '#62b04f' : '#6dbb59'; ctx.fill(); }
+    rect(-(L - 1), -(Wd - 1), L - 1, Wd - 1); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // ------------------------------------------------------------ budovy
@@ -755,7 +814,7 @@ export function buildTrees(map, terrain) {
 }
 
 // ------------------------------------------------------------ popisky
-const POI_ICON = { halt: '🚉', kindergarten: '🧸', mill: '⚙️', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
+const POI_ICON = { pumptrack: '🚲', halt: '🚉', kindergarten: '🧸', mill: '⚙️', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
 const POI_SKIP = new Set(['parcel_locker', 'static_caravan']);
 
 export function buildLabels(map, terrain) {
@@ -831,7 +890,7 @@ export class Colliders {
     }
     for (const d of this.dynamic) {
       if (Math.abs(d.cx - pos.x) > d.r + R || Math.abs(d.cz - pos.z) > d.r + R) continue;
-      const n = this.poly(d.poly, pos, R);
+      const n = d.circle ? this.circle(d, pos, R) : this.poly(d.poly, pos, R);
       if (n) { hit = n; hit.dynamic = d; }
     }
     return hit;
@@ -1049,4 +1108,162 @@ export function buildRails(map) {
   bedMesh.renderOrder = 5;
   const steelMesh = new THREE.Mesh(steel.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
   return [bedMesh, steelMesh];
+}
+
+// ------------------------------------------------------------ rybníky
+export function buildPonds(map) {
+  const meshes = [];
+  const mat = new THREE.MeshPhongMaterial({ color: '#4d7a6c', specular: '#9fb8b0', shininess: 80, transparent: true, opacity: 0.9 });
+  for (const pd of map.ponds || []) {
+    const contour = pd.p.map(([x, z]) => new THREE.Vector2(x, z));
+    const tris = THREE.ShapeUtils.triangulateShape(contour, []);
+    const pos = [];
+    for (const [a, b, c] of tris) for (const k of [a, c, b]) pos.push(pd.p[k][0], pd.h, pd.p[k][1]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    // trojúhelníky lícem nahoru
+    const n = g.attributes.normal;
+    if (n.count && n.getY(0) < 0) { for (let i = 0; i < pos.length; i += 9) { [pos[i + 3], pos[i + 6]] = [pos[i + 6], pos[i + 3]]; [pos[i + 4], pos[i + 7]] = [pos[i + 7], pos[i + 4]]; [pos[i + 5], pos[i + 8]] = [pos[i + 8], pos[i + 5]]; } g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); }
+    const m = new THREE.Mesh(g, mat);
+    m.receiveShadow = true;
+    m.renderOrder = 6;
+    meshes.push(m);
+  }
+  return meshes;
+}
+
+// ------------------------------------------------------------ vybavení hřišť a rybníků
+function seatedPerson(gb, x, y, z, rot, shirt) {
+  const cs = Math.cos(rot), sn = Math.sin(rot);
+  const at = (a, d) => [x + a * cs - d * sn, z + a * sn + d * cs];
+  const [sx, sz] = at(0, 0);
+  gb.box(sx, sz, y, y + 0.45, 0.22, 0.22, rot, C('#4a4a4a'));            // stolička
+  gb.box(sx, sz, y + 0.45, y + 1.05, 0.22, 0.17, rot, C(shirt));          // tělo
+  gb.box(sx, sz, y + 1.05, y + 1.3, 0.12, 0.12, rot, C('#f1c9a5'));       // hlava
+  gb.box(sx, sz, y + 1.3, y + 1.38, 0.17, 0.17, rot, C('#3d5a35'));       // klobouk
+  const [kx, kz] = at(0, 0.25);
+  gb.box(kx, kz, y + 0.4, y + 0.5, 0.2, 0.25, rot, C('#33415a'));         // nohy
+  // prut
+  for (let i = 0; i < 10; i++) {
+    const [px, pz] = at(0, 0.3 + i * 0.35);
+    gb.box(px, pz, y + 0.9 + i * 0.16, y + 0.95 + i * 0.16, 0.02, 0.2, rot, C('#2b2b2b'));
+  }
+}
+
+function bench(gb, x, y, z, rot) {
+  const wood = C('#8a5a34'), iron = C('#2f2f2f');
+  const cs = Math.cos(rot), sn = Math.sin(rot);
+  for (const a of [-0.7, 0.7]) gb.box(x + a * cs, z + a * sn, y, y + 0.45, 0.05, 0.22, rot, iron);
+  gb.box(x, z, y + 0.42, y + 0.48, 0.85, 0.22, rot, wood);
+  gb.box(x - 0.2 * sn, z + 0.2 * cs, y + 0.55, y + 0.85, 0.85, 0.03, rot, wood);
+}
+
+export function buildProps(map, terrain) {
+  const gb = new GeoBuilder();
+  const fence = new GeoBuilder();
+  const circles = [];
+  const white = C('#f7f7f2'), wood = C('#c9772f'), darkWood = C('#5b3b25'), steel = C('#b8bcc0'), dark = C('#2b302b');
+  const Hh = (x, z) => terrain.height(x, z);
+
+  for (const f of map.pitches || []) {
+    const box = obb(f.p);
+    const { c, u, v, L, W } = box;
+    const rot = Math.atan2(u[1], u[0]);
+    const P = (a, d) => [c[0] + u[0] * a + v[0] * d, c[1] + u[1] * a + v[1] * d];
+    const y = Hh(c[0], c[1]);
+
+    if (f.c === 'pitch' && f.sp === 'soccer') {
+      for (const e of [-1, 1]) {
+        const gw = Math.min(3.66, W * 0.3);
+        for (const d of [-gw, gw]) { const [x, z] = P(e * (L - 1.5), d); gb.box(x, z, y, y + 2.44, 0.06, 0.06, rot, white); circles.push([x, z, 0.2]); }
+        const [x, z] = P(e * (L - 1.5), 0);
+        gb.box(x, z, y + 2.38, y + 2.5, 0.06, gw + 0.06, rot, white);
+        for (const d of [-gw, gw]) { const [bx, bz] = P(e * (L - 0.3), d); gb.box(bx, bz, y, y + 1.2, 0.04, 0.04, rot, white); }
+      }
+    } else if (f.c === 'pitch' && f.sp === 'tennis') {
+      const [x, z] = P(0, 0);
+      const hw = Math.min(6.4, W - 0.5);
+      gb.box(x, z, y, y + 0.92, 0.03, hw, rot, dark);
+      gb.box(x, z, y + 0.92, y + 1.0, 0.04, hw, rot, white);
+      for (const d of [-hw, hw]) { const [px, pz] = P(0, d); gb.box(px, pz, y, y + 1.07, 0.05, 0.05, rot, dark); }
+      // plot kolem kurtu
+      const ring = f.p;
+      for (let i = 0; i < ring.length; i++) {
+        const [x1, z1] = ring[i], [x2, z2] = ring[(i + 1) % ring.length];
+        const Ls = Math.hypot(x2 - x1, z2 - z1);
+        const y1 = Hh(x1, z1), y2 = Hh(x2, z2);
+        fence.quad([x1, y1, z1], [x2, y2, z2], [x2, y2 + 3, z2], [x1, y1 + 3, z1], C('#2f5d3a'), null);
+        for (let k = 0; k <= Ls / 3; k++) {
+          const t = k * 3 / Ls, px = x1 + (x2 - x1) * t, pz = z1 + (z2 - z1) * t;
+          gb.box(px, pz, Hh(px, pz), Hh(px, pz) + 3.05, 0.04, 0.04, 0, C('#24402a'));
+        }
+      }
+    } else if (f.c === 'playground' && L * W > 150) {
+      const k = Math.min(1, Math.min(L, W) / 12);
+      // věž se skluzavkou
+      { const [x, z] = P(-L * 0.45, -W * 0.3); const ty = Hh(x, z);
+        for (const [a, d] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const [px, pz] = [x + (a * Math.cos(rot) - d * Math.sin(rot)) * 0.9, z + (a * Math.sin(rot) + d * Math.cos(rot)) * 0.9]; gb.box(px, pz, ty, ty + 3.2, 0.07, 0.07, rot, wood); }
+        gb.box(x, z, ty + 1.45, ty + 1.55, 0.95, 0.95, rot, wood);
+        gb.box(x, z, ty + 3.1, ty + 3.2, 0.95, 0.95, rot, wood);
+        // skluzavka do strany
+        const s0 = P(-L * 0.45, -W * 0.3 + 1.0), s1 = P(-L * 0.45, -W * 0.3 + 1.0 + 3.6 * k);
+        const nx = -u[1] * 0 + u[0] * 0.3, nz = u[1] * 0.3;
+        gb.quad([s0[0] - nx, ty + 1.5, s0[1] - nz], [s0[0] + nx, ty + 1.5, s0[1] + nz], [s1[0] + nx, ty + 0.2, s1[1] + nz], [s1[0] - nx, ty + 0.2, s1[1] - nz], steel, [0, 1, 0]);
+        gb.quad([s0[0] - nx, ty + 1.5, s0[1] - nz], [s0[0] + nx, ty + 1.5, s0[1] + nz], [s1[0] + nx, ty + 0.2, s1[1] + nz], [s1[0] - nx, ty + 0.2, s1[1] - nz], steel, [0, -1, 0]);
+        circles.push([x, z, 1.4]);
+      }
+      // houpačky
+      { const [x, z] = P(L * 0.2, W * 0.35); const ty = Hh(x, z);
+        for (const a of [-1.6, 1.6]) { const [px, pz] = [x + Math.cos(rot) * a, z + Math.sin(rot) * a]; gb.box(px, pz, ty, ty + 2.5, 0.09, 0.09, rot, wood); circles.push([px, pz, 0.3]); }
+        gb.box(x, z, ty + 2.4, ty + 2.55, 1.7, 0.08, rot, wood);
+        for (const a of [-0.6, 0.6]) {
+          const [px, pz] = [x + Math.cos(rot) * a, z + Math.sin(rot) * a];
+          gb.box(px, pz, ty + 0.45, ty + 2.4, 0.015, 0.015, rot, dark);
+          gb.box(px, pz, ty + 0.4, ty + 0.48, 0.22, 0.12, rot, C('#222'));
+        }
+      }
+      // altán
+      { const [x, z] = P(L * 0.45, -W * 0.3); const ty = Hh(x, z);
+        for (const [a, d] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const [px, pz] = [x + (a * Math.cos(rot) - d * Math.sin(rot)) * 1.6, z + (a * Math.sin(rot) + d * Math.cos(rot)) * 1.6]; gb.box(px, pz, ty, ty + 2.3, 0.08, 0.08, rot, darkWood); }
+        gb.pyramid(x, z, ty + 2.3, ty + 3.6, 2.2, rot, C('#4b5054'));
+        gb.box(x, z, ty + 0.7, ty + 0.78, 0.9, 0.5, rot, darkWood);
+        circles.push([x, z, 1.9]);
+      }
+      // trampolíny
+      for (const [a, d] of [[L * 0.05, -W * 0.45], [-L * 0.1, W * 0.4]]) { const [x, z] = P(a, d); gb.box(x, z, Hh(x, z) + 0.02, Hh(x, z) + 0.05, 0.75, 0.75, rot, C('#1f1f1f')); }
+      { const [x, z] = P(0, W * 0.9); bench(gb, x, Hh(x, z), z, rot); }
+    }
+  }
+
+  // mola a rybáři u rybníků
+  const rnd = hashRand(77);
+  for (const pd of map.ponds || []) {
+    const ring = pd.p;
+    let cx = 0, cz = 0; ring.forEach(([x, z]) => { cx += x; cz += z; }); cx /= ring.length; cz /= ring.length;
+    const area = Math.abs(polyArea(ring));
+    if (area < 600) continue;
+    // nejdelší hrana břehu -> molo do vody
+    let bi = 0, bl = 0;
+    ring.forEach(([x, z], i) => { const [x2, z2] = ring[(i + 1) % ring.length]; const l = Math.hypot(x2 - x, z2 - z); if (l > bl) { bl = l; bi = i; } });
+    const [x1, z1] = ring[bi], [x2, z2] = ring[(bi + 1) % ring.length];
+    const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+    let dx = cx - mx, dz = cz - mz; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+    const len = Math.min(7, dl * 0.4);
+    const rot = Math.atan2(dz, dx);
+    const jx = mx + dx * len / 2, jz = mz + dz * len / 2;
+    gb.box(jx, jz, pd.h + 0.35, pd.h + 0.45, len / 2 + 1, 0.8, rot, C('#8a6a45'));
+    for (let k = 0; k <= len; k += 2) for (const s of [-0.7, 0.7]) gb.box(mx + dx * k - dz * s, mz + dz * k + dx * s, pd.h - 1, pd.h + 0.4, 0.07, 0.07, rot, C('#5b4330'));
+    seatedPerson(gb, mx + dx * (len - 0.6), pd.h + 0.45, mz + dz * (len - 0.6), rot - Math.PI / 2, pick(['#3d6b3a', '#8a4a2a', '#2f4f7a'], rnd()));
+    // další rybář na břehu
+    const k = Math.floor(rnd() * ring.length), [bx, bz] = ring[k];
+    let ex = cx - bx, ez = cz - bz; const el = Math.hypot(ex, ez) || 1; ex /= el; ez /= el;
+    seatedPerson(gb, bx - ex * 1.5, Hh(bx - ex * 1.5, bz - ez * 1.5), bz - ez * 1.5, Math.atan2(ez, ex) - Math.PI / 2, pick(['#6b6b3a', '#7a2f2f', '#2f6b6b'], rnd()));
+    bench(gb, mx - dx * 4 - dz * 2, Hh(mx - dx * 4 - dz * 2, mz - dz * 4 + dx * 2), mz - dz * 4 + dx * 2, rot + Math.PI / 2);
+  }
+
+  const meshes = [];
+  if (gb.pos.length) { const m = new THREE.Mesh(gb.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true })); m.castShadow = true; m.receiveShadow = true; meshes.push(m); }
+  if (fence.pos.length) meshes.push(new THREE.Mesh(fence.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false })));
+  return { meshes, circles };
 }
