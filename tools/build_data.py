@@ -404,7 +404,7 @@ POI_KEYS = ("amenity", "shop", "tourism", "historic", "leisure", "office", "craf
 
 # Potoky svedené do potrubí: OSM id -> v jaké vzdálenosti od domů je potok pod zemí (m)
 PIPED_STREAMS = {
-    "81893492": 70,  # Ledský potok – v obci sveden do potrubí (cca 60. léta)
+    "81886238": 45,  # bezejmenný potok od Ovčírky ulicí k severovýchodu – v obci sveden do potrubí (cca 60. léta)
 }
 
 # Dominanty obce – vzhled podle virtuální prohlídky na sumice.cz (OSM id budovy -> styl, popisek, počet pater)
