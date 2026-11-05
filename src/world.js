@@ -458,15 +458,150 @@ class GeoBuilder {
 }
 
 const C = (hex) => new THREE.Color(hex);
-const WALLS = ['#f4f0e6', '#efe4c6', '#eadcc0', '#f3e7d1', '#e7e2d8', '#f1dba9', '#e2e9ec', '#f2d7c4', '#e9efd9'].map(C);
-const ROOFS = ['#a9442a', '#b5552f', '#8e3b27', '#6d4b3b', '#5b6067', '#9c402c', '#7a3424', '#b0613a'].map(C);
+// moderní vesnice: světlé omítky, převážně červené tašky (podle leteckých záběrů obce)
+const WALLS = ['#f6f3ec', '#f1e8d2', '#f3e2b8', '#ece8de', '#f2d8c4', '#e7ebe6', '#f5ebca', '#eadcc8', '#f8f1de', '#e9d3b0'].map(C);
+const ROOFS_RED = ['#b5452c', '#c0532f', '#a63d28', '#bf5a35', '#ad4a2d'].map(C);
+const ROOFS_OTHER = ['#6b3f2f', '#7a4a36', '#4b4f55', '#5a5e64'].map(C);
 const AG_WALL = C('#d8d1c2'), AG_ROOF = C('#7c7f82'), FLAT_ROOF = C('#6e6a66');
-const CHURCH_WALL = C('#f3e3b3'), CHURCH_ROOF = C('#b4532f'), TOWER_ROOF = C('#3d4448');
-const BASE = C('#a39a8a');
+const BASE = C('#a39a8a'), GLASS = C('#3d4c5c'), FRAME = C('#f4f4ef'), DOOR = C('#6b4a33'), WHITE = C('#f7f4ec');
+const GOLD = C('#d4b04c');
+
+// dominanty podle virtuální prohlídky obce
+const STYLE = {
+  church: { wall: '#ecc56a', roof: '#b5452c' },
+  ou: { wall: '#f2a183', roof: '#8d8781', flat: true, accent: '#e8703e', floorH: 3.1 },
+  ou_wing: { wall: '#ecdcbc', roof: '#b5452c', floorH: 3.0 },
+  zs: { wall: '#f5cf4c', roof: '#c4432b', accent: '#ef8a3c', tower: '#e9e6df', floorH: 3.4 },
+  ms: { wall: '#f6d94a', roof: '#8e9196', hip: true, floorH: 3.0 },
+  mlyn: { wall: '#cdc8bc', roof: '#4f5358', hip: true, floorH: 3.1 },
+  chalupa: { wall: '#f8f6f0', roof: '#5a4a3c', gable: true, pitch: 0.9, floorH: 2.7 },
+};
 
 const SMALL = new Set(['garage', 'garages', 'shed', 'carport', 'roof', 'hut', 'kiosk', 'container', 'static_caravan', 'toilets']);
 const AG = new Set(['barn', 'farm_auxiliary', 'agricultural', 'cowshed', 'stable', 'industrial', 'warehouse', 'greenhouse', 'manufacture', 'service']);
 const BIG = new Set(['civic', 'townhall', 'school', 'retail', 'commercial', 'public', 'apartments', 'office', 'kindergarten']);
+
+function rectOf(box, grow = 0) {
+  const { c, u, v, L, W } = box;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, d]) => [c[0] + u[0] * (L + grow) * a + v[0] * (W + grow) * d, c[1] + u[1] * (L + grow) * a + v[1] * (W + grow) * d]);
+}
+
+// okna (a dveře) po obvodu
+function addWindows(gb, foot, baseY, floors, floorH, o) {
+  const ccw = polyArea(foot) > 0;
+  let longest = -1, longL = 0;
+  for (let i = 0; i < foot.length; i++) {
+    const [x1, z1] = foot[i], [x2, z2] = foot[(i + 1) % foot.length];
+    const L = Math.hypot(x2 - x1, z2 - z1);
+    if (L > longL) { longL = L; longest = i; }
+  }
+  for (let i = 0; i < foot.length; i++) {
+    const [x1, z1] = foot[i], [x2, z2] = foot[(i + 1) % foot.length];
+    const dx = x2 - x1, dz = z2 - z1, L = Math.hypot(dx, dz);
+    const n = Math.floor((L - 1.0) / o.spacing);
+    if (n < 1) continue;
+    const ex = dx / L, ez = dz / L;
+    const nx = (ccw ? dz : -dz) / L, nz = (ccw ? -dx : dx) / L;
+    const want = [nx, 0, nz];
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) / n;
+      const cx = x1 + dx * t, cz = z1 + dz * t;
+      for (let f = 0; f < floors; f++) {
+        const isDoor = o.door && f === 0 && i === longest && k === Math.floor(n / 2);
+        const w = isDoor ? 0.6 : o.w / 2;
+        const y0 = baseY + f * floorH + (isDoor ? 0.05 : o.sill);
+        const y1 = isDoor ? y0 + 2.15 : y0 + o.h;
+        const quad = (ww, ya, yb, off, col) => {
+          const ax = cx - ex * ww + nx * off, az = cz - ez * ww + nz * off;
+          const bx = cx + ex * ww + nx * off, bz = cz + ez * ww + nz * off;
+          gb.quad([ax, ya, az], [bx, ya, bz], [bx, yb, bz], [ax, yb, az], col, want);
+        };
+        quad(w + 0.09, y0 - 0.09, y1 + 0.09, 0.03, o.frame || FRAME);
+        quad(w, y0, y1, 0.05, isDoor ? DOOR : GLASS);
+      }
+    }
+  }
+}
+
+function gableRoof(gb, box, top, pitch, o, roofC, wallC) {
+  const { c, u, v, L, W } = box;
+  const tan = Math.tan(pitch), ridge = top + W * tan, eave = top - o * tan;
+  const P = (a, d, y) => [c[0] + u[0] * a + v[0] * d, y, c[1] + u[1] * a + v[1] * d];
+  const Lo = L + o * 0.6, Wo = W + o;
+  gb.quad(P(-Lo, Wo, eave), P(Lo, Wo, eave), P(Lo, 0, ridge), P(-Lo, 0, ridge), roofC, [v[0], 1, v[1]]);
+  gb.quad(P(-Lo, -Wo, eave), P(Lo, -Wo, eave), P(Lo, 0, ridge), P(-Lo, 0, ridge), roofC, [-v[0], 1, -v[1]]);
+  gb.tri(P(L, -W, top), P(L, W, top), P(L, 0, ridge), wallC, [u[0], 0, u[1]]);
+  gb.tri(P(-L, -W, top), P(-L, W, top), P(-L, 0, ridge), wallC, [-u[0], 0, -u[1]]);
+  return ridge;
+}
+
+function hipRoof(gb, box, top, pitch, o, roofC) {
+  const { c, u, v, L, W } = box;
+  const tan = Math.tan(pitch), ridge = top + W * tan, eave = top - o * tan;
+  const P = (a, d, y) => [c[0] + u[0] * a + v[0] * d, y, c[1] + u[1] * a + v[1] * d];
+  const Lo = L + o, Wo = W + o, r = Math.max(0, L - W);
+  gb.quad(P(-Lo, Wo, eave), P(Lo, Wo, eave), P(r, 0, ridge), P(-r, 0, ridge), roofC, [v[0], 1, v[1]]);
+  gb.quad(P(-Lo, -Wo, eave), P(Lo, -Wo, eave), P(r, 0, ridge), P(-r, 0, ridge), roofC, [-v[0], 1, -v[1]]);
+  gb.tri(P(Lo, -Wo, eave), P(Lo, Wo, eave), P(r, 0, ridge), roofC, [u[0], 1, u[1]]);
+  gb.tri(P(-Lo, -Wo, eave), P(-Lo, Wo, eave), P(-r, 0, ridge), roofC, [-u[0], 1, -u[1]]);
+  return ridge;
+}
+
+// na kterém konci lodi je věž: naproti apsidě (zaoblený konec má víc bodů obrysu)
+function towerEnd(ring, box) {
+  const { c, u, L } = box;
+  let plus = 0, minus = 0;
+  for (const [x, z] of ring) {
+    const a = (x - c[0]) * u[0] + (z - c[1]) * u[1];
+    if (a > L * 0.45) plus++; else if (a < -L * 0.45) minus++;
+  }
+  if (plus !== minus) return plus > minus ? -1 : 1;
+  return (c[0] + u[0] * L) < (c[0] - u[0] * L) ? 1 : -1; // jinak západ
+}
+
+function buildChurch(gb, b, box, y0, ground, chapel) {
+  const st = STYLE.church;
+  const wallC = C(st.wall), roofC = C(st.roof);
+  const { c, u, W } = box;
+  const wallH = chapel ? 5 : 10;
+  const top = ground + wallH;
+  const foot = rectOf(box);
+  gb.walls(foot, y0, ground + 0.5, BASE);
+  gb.walls(foot, ground + 0.5, top, wallC);
+  gb.walls(rectOf(box, 0.08), top - 0.55, top, WHITE); // bílá římsa
+  if (!chapel) addWindows(gb, foot, ground, 1, 0, { spacing: 4.2, w: 1.2, h: 3.4, sill: 3.0, frame: WHITE, door: false });
+  gableRoof(gb, box, top, 0.8, 0.3, roofC, wallC);
+  const sgn = towerEnd(b.p, box);
+  const tw = chapel ? Math.min(1.4, W * 0.6) : Math.min(3.0, W * 0.8);
+  const L = box.L;
+  const tc = [c[0] + u[0] * (L + (chapel ? -tw : tw * 0.35)) * sgn, c[1] + u[1] * (L + (chapel ? -tw : tw * 0.35)) * sgn];
+  const rot = Math.atan2(u[1], u[0]);
+  const th = chapel ? top + W * 0.8 + 2.5 : top + 13;
+  gb.box(tc[0], tc[1], y0, th, tw, tw, rot, wallC);
+  gb.box(tc[0], tc[1], th - 0.5, th, tw + 0.1, tw + 0.1, rot, WHITE);
+  if (!chapel) {
+    gb.box(tc[0], tc[1], top - 0.5, top, tw + 0.1, tw + 0.1, rot, WHITE);
+    // hodiny na všech stranách věže
+    for (const [a, d] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      const ox = (a * cs - d * sn) * (tw + 0.04), oz = (a * sn + d * cs) * (tw + 0.04);
+      gb.box(tc[0] + ox, tc[1] + oz, th - 3.4, th - 1.6, a ? 0.03 : 0.9, d ? 0.03 : 0.9, rot, WHITE);
+      gb.box(tc[0] + ox * 1.01, tc[1] + oz * 1.01, th - 2.55, th - 2.45, a ? 0.03 : 0.6, d ? 0.03 : 0.6, rot, C('#333'));
+    }
+  }
+  // tmavá báň se špičkou a zlatý kříž
+  const TOWER_ROOF = C('#3a4045');
+  const r1 = th + (chapel ? 2.5 : 4);
+  gb.pyramid(tc[0], tc[1], th, r1, tw * 1.05, rot, TOWER_ROOF);
+  if (!chapel) {
+    gb.box(tc[0], tc[1], r1 - 0.6, r1 + 1.2, 0.6, 0.6, rot, TOWER_ROOF);
+    gb.pyramid(tc[0], tc[1], r1 + 1.2, r1 + 4.5, 0.6, rot, TOWER_ROOF);
+  }
+  const ch = chapel ? r1 : r1 + 4.5;
+  gb.box(tc[0], tc[1], ch, ch + 1.8, 0.08, 0.08, rot, GOLD);
+  gb.box(tc[0], tc[1], ch + 1.1, ch + 1.25, 0.5, 0.08, rot, GOLD);
+  return foot;
+}
 
 export function buildBuildings(map) {
   const gb = new GeoBuilder();
@@ -478,61 +613,78 @@ export function buildBuildings(map) {
     const ring = b.p;
     const area = Math.abs(polyArea(ring));
     const box = obb(ring);
-    const sacral = t === 'church' || t === 'chapel';
-    const rectish = sacral || (area / box.area > 0.82 && box.W > 1.2);
-
-    let wallH, pitch, wallC, roofC, flatRoof = false;
-    if (t === 'church') { wallH = 9; pitch = 0.85; wallC = CHURCH_WALL; roofC = CHURCH_ROOF; }
-    else if (t === 'chapel') { wallH = 5; pitch = 0.85; wallC = CHURCH_WALL; roofC = CHURCH_ROOF; }
-    else if (SMALL.has(t)) { wallH = 2.5; pitch = 0.2; wallC = pick(WALLS, rnd()); roofC = FLAT_ROOF; flatRoof = !rectish || area < 30 || rnd() < 0.5; }
-    else if (AG.has(t) || area > 400) { wallH = 5; pitch = 0.45; wallC = AG_WALL; roofC = AG_ROOF; }
-    else if (BIG.has(t)) { wallH = 7; pitch = 0.65; wallC = pick(WALLS, rnd()); roofC = pick(ROOFS, rnd()); }
-    else { wallH = 3.3; pitch = 0.75 + rnd() * 0.15; wallC = pick(WALLS, rnd()); roofC = pick(ROOFS, rnd()); }
-    if (b.l && t !== 'church') wallH = Math.max(wallH, b.l * 3);
-    if (b.h && t !== 'church') wallH = Math.max(2.2, b.h - (flatRoof ? 0 : box.W * Math.tan(pitch)));
-
     const y0 = b.y - 0.6;
-    const top = b.y + b.dy + wallH;
+    const ground = b.y + b.dy;
 
-    let foot = ring;
-    if (rectish && !flatRoof) {
-      const { c, u, v, L, W } = box;
-      foot = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, d]) => [c[0] + u[0] * L * a + v[0] * W * d, c[1] + u[1] * L * a + v[1] * W * d]);
+    if (t === 'church' || t === 'chapel' || b.st === 'church') {
+      colliders.push(buildChurch(gb, b, box, y0, ground, t === 'chapel'));
+      continue;
     }
-    // sokl
-    gb.walls(foot, y0, b.y + b.dy + 0.35, BASE);
-    gb.walls(foot, b.y + b.dy + 0.35, top, wallC);
+
+    const st = b.st ? STYLE[b.st] : null;
+    const rectish = area / box.area > 0.82 && box.W > 1.2;
+    const small = SMALL.has(t) || area < 22;
+    const ag = !st && (AG.has(t) || area > 400);
+    let floors = b.l || (BIG.has(t) ? 2 : 1);
+    if (!b.l && !small && !ag && area > 90 && rnd() < 0.35) floors = 2;
+    const floorH = st?.floorH || (ag ? 4.5 : small ? 2.5 : 2.9);
+    let wallH = small ? 2.5 : floors * floorH + 0.4;
+    if (b.h && !st) wallH = Math.max(2.2, b.h * 0.75);
+
+    let wallC, roofC, roof;
+    if (st) {
+      wallC = C(st.wall); roofC = C(st.roof);
+      roof = st.flat || !rectish ? 'flat' : st.gable ? 'gable' : st.hip ? 'hip' : 'gable';
+    } else if (small) {
+      wallC = pick(WALLS, rnd()); roofC = FLAT_ROOF;
+      roof = rectish && rnd() < 0.5 ? 'gable' : 'flat';
+    } else if (ag) {
+      wallC = AG_WALL; roofC = AG_ROOF; roof = rectish ? 'gable' : 'flat';
+    } else {
+      wallC = pick(WALLS, rnd());
+      roofC = rnd() < 0.75 ? pick(ROOFS_RED, rnd()) : pick(ROOFS_OTHER, rnd());
+      const squarish = box.L / Math.max(box.W, 0.1) < 1.5;
+      roof = !rectish ? 'flat' : (squarish && rnd() < 0.7) || (!squarish && rnd() < 0.25) ? 'hip' : 'gable';
+    }
+    const pitch = st?.pitch || (small ? 0.25 : ag ? 0.35 : 0.6 + rnd() * 0.15);
+    const top = ground + wallH;
+    const foot = roof === 'flat' ? ring : rectOf(box);
+
+    gb.walls(foot, y0, ground + 0.35, BASE);
+    gb.walls(foot, ground + 0.35, top, wallC);
     colliders.push(foot);
 
-    if (rectish && !flatRoof) {
-      const { c, u, v, L, W } = box;
-      const o = t === 'church' ? 0.3 : 0.45;
-      const tan = Math.tan(pitch);
-      const ridge = top + W * tan;
-      const eave = top - o * tan;
-      const P = (a, d, y) => [c[0] + u[0] * a + v[0] * d, y, c[1] + u[1] * a + v[1] * d];
-      const Lo = L + o * 0.6, Wo = W + o;
-      gb.quad(P(-Lo, Wo, eave), P(Lo, Wo, eave), P(Lo, 0, ridge), P(-Lo, 0, ridge), roofC, [v[0], 1, v[1]]);
-      gb.quad(P(-Lo, -Wo, eave), P(Lo, -Wo, eave), P(Lo, 0, ridge), P(-Lo, 0, ridge), roofC, [-v[0], 1, -v[1]]);
-      gb.tri(P(L, -W, top), P(L, W, top), P(L, 0, ridge), wallC, [u[0], 0, u[1]]);
-      gb.tri(P(-L, -W, top), P(-L, W, top), P(-L, 0, ridge), wallC, [-u[0], 0, -u[1]]);
+    if (!small) {
+      addWindows(gb, foot, ground + 0.35, ag ? 1 : floors, floorH, ag
+        ? { spacing: 7, w: 1.6, h: 0.9, sill: 2.4, door: false }
+        : { spacing: 3.1, w: 1.15, h: 1.3, sill: 0.85, door: true });
+    }
 
-      if (t === 'church' || t === 'chapel') {
-        // věž na západnějším konci
-        const sgn = (c[0] + u[0] * L) < (c[0] - u[0] * L) ? 1 : -1;
-        const tw = t === 'church' ? Math.min(3.2, W * 0.85) : Math.min(1.4, W * 0.6);
-        const tc = [c[0] + u[0] * (L - tw) * sgn, c[1] + u[1] * (L - tw) * sgn];
-        const rot = Math.atan2(u[1], u[0]);
-        const th = t === 'church' ? top + 14 : ridge + 2.5;
-        gb.box(tc[0], tc[1], y0, th, tw, tw, rot, CHURCH_WALL);
-        gb.pyramid(tc[0], tc[1], th, th + (t === 'church' ? 9 : 3), tw * 1.08, rot, TOWER_ROOF);
-        // kříž
-        const ch = th + (t === 'church' ? 9 : 3);
-        gb.box(tc[0], tc[1], ch, ch + 1.8, 0.08, 0.08, rot, C('#d4b04c'));
-        gb.box(tc[0], tc[1], ch + 1.1, ch + 1.25, 0.55, 0.08, rot, C('#d4b04c'));
-      }
+    if (st?.accent) {
+      // výrazný rizalit / schodišťová část (obecní úřad, škola)
+      const { c, u, L, W } = box;
+      let v = box.v;
+      // rizalit na stranu k nejbližší silnici (tam je vchod)
+      const r = nearestRoadPoint(map, c[0], c[1], ['primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'service', 'living_street']);
+      if (r && (r.x - c[0]) * v[0] + (r.z - c[1]) * v[1] < 0) v = [-v[0], -v[1]];
+      const rot = Math.atan2(u[1], u[0]);
+      const cx = c[0] + v[0] * (W + 0.6), cz = c[1] + v[1] * (W + 0.6);
+      gb.box(cx, cz, y0, top + (roof === 'flat' ? 2.2 : 0), Math.min(3.4, L * 0.3), 0.9, rot, C(st.accent));
+      addWindows(gb, rectOf({ c: [cx, cz], u, v, L: Math.min(3.4, L * 0.3), W: 0.9 }), ground + 0.35, floors, floorH, { spacing: 2.4, w: 1.4, h: 1.8, sill: 0.6, door: false });
+    }
+    if (st?.tower) {
+      const { c, u, L } = box;
+      const rot = Math.atan2(u[1], u[0]);
+      gb.box(c[0] + u[0] * (L + 1.6), c[1] + u[1] * (L + 1.6), y0, top + 3, 1.6, 2.2, rot, C(st.tower));
+    }
+
+    if (roof === 'flat') {
+      gb.walls(foot, top, top + 0.3, wallC.clone().multiplyScalar(0.92)); // atika
+      gb.flat(foot, top + 0.05, roofC === FLAT_ROOF || st?.flat ? roofC : roofC.clone().multiplyScalar(0.8));
+    } else if (roof === 'hip') {
+      hipRoof(gb, box, top, pitch, 0.5, roofC);
     } else {
-      gb.flat(foot, top, roofC === FLAT_ROOF ? FLAT_ROOF : roofC.clone().multiplyScalar(0.8));
+      gableRoof(gb, box, top, pitch, small ? 0.2 : 0.45, roofC, wallC);
     }
   }
   const mesh = new THREE.Mesh(gb.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
@@ -603,7 +755,7 @@ export function buildTrees(map, terrain) {
 }
 
 // ------------------------------------------------------------ popisky
-const POI_ICON = { halt: '🚉', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
+const POI_ICON = { halt: '🚉', kindergarten: '🧸', mill: '⚙️', church: '⛪', museum: '🏛️', convenience: '🛒', townhall: '🏠', post_office: '✉️', school: '🏫', pub: '🍺', cafe: '🍰', playground: '🛝', pitch: '⚽', fire_station: '🚒' };
 const POI_SKIP = new Set(['parcel_locker', 'static_caravan']);
 
 export function buildLabels(map, terrain) {

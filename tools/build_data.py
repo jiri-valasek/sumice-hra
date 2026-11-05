@@ -327,6 +327,17 @@ AREA_ORDER = ["residential", "farmland", "meadow", "grass", "garden", "orchard",
 
 POI_KEYS = ("amenity", "shop", "tourism", "historic", "leisure", "office", "craft")
 
+# Dominanty obce – vzhled podle virtuální prohlídky na sumice.cz (OSM id budovy -> styl, popisek, počet pater)
+LANDMARKS = {
+    "36998573": ("church", None, None),
+    "36998624": ("ou", None, 3),
+    "461136373": ("ou_wing", None, 2),
+    "36998576": ("zs", "Základní škola", 2),
+    "255724940": ("ms", "Mateřská škola", 2),
+    "255724922": ("mlyn", "Válcový mlýn", 2),
+    "255725129": ("chalupa", "Hasoňova chalupa", 1),
+}
+
 
 def tags_of(e):
     return {t.get("k"): t.get("v") for t in e.iter("tag")}
@@ -496,8 +507,16 @@ def build_osm(refresh, dem, hmin):
                 b["t"] = "church" if t["building"] == "church" else "chapel"
             if "name" in t:
                 b["n"] = t["name"]
-            buildings.append(b)
             cx, cz = centroid(ring)
+            if wid in LANDMARKS:
+                st, label, lv = LANDMARKS[wid]
+                b["st"] = st
+                if lv:
+                    b["l"] = lv
+                if label:
+                    kind = {"zs": "school", "ms": "kindergarten", "mlyn": "mill", "chalupa": "museum"}[st]
+                    pois.append({"n": label, "k": kind, "x": round(cx, 1), "z": round(cz, 1)})
+            buildings.append(b)
             add_poi(t, cx, cz)
             continue
 
@@ -582,6 +601,38 @@ def build_osm(refresh, dem, hmin):
                     k = kind
                 trees.append([round(float(x), 1), round(float(z), 1), k, round(rnd.uniform(0.75, 1.3), 2)])
                 forest_trees += kind == 1
+
+    # stromy v zahradách (z dronu je ves plná zeleně)
+    bcells = {}
+    for b in buildings:
+        xs = [x for x, _ in b["p"]]; zs = [z for _, z in b["p"]]
+        for i in range(int(min(xs) // 10) - 1, int(max(xs) // 10) + 2):
+            for j in range(int(min(zs) // 10) - 1, int(max(zs) // 10) + 2):
+                bcells.setdefault((i, j), []).append(b["p"])
+    garden = 0
+    for a in areas:
+        if a["c"] not in ("residential", "garden"):
+            continue
+        for ring in a["p"]:
+            xs = [x for x, _ in ring]; zs = [z for _, z in ring]
+            x0, x1 = max(min(xs), -WIDTH_M / 2), min(max(xs), WIDTH_M / 2)
+            z0, z1 = max(min(zs), -HEIGHT_M / 2), min(max(zs), HEIGHT_M / 2)
+            if x1 <= x0 or z1 <= z0:
+                continue
+            n = int((x1 - x0) * (z1 - z0) / 260)
+            px = np.array([rnd.uniform(x0, x1) for _ in range(n)])
+            pz = np.array([rnd.uniform(z0, z1) for _ in range(n)])
+            if not n:
+                continue
+            ins = points_in_poly(px, pz, ring)
+            for x, z in zip(px[ins], pz[ins]):
+                near = bcells.get((int(x // 10), int(z // 10)), [])
+                if any(points_in_poly(np.array([x, x + 3, x - 3, x, x]), np.array([z, z, z, z + 3, z - 3]), q).any() for q in near):
+                    continue  # moc blízko domu
+                kind = 2 if rnd.random() < 0.55 else (0 if rnd.random() < 0.8 else 4)
+                trees.append([round(float(x), 1), round(float(z), 1), kind, round(rnd.uniform(0.7, 1.15), 2)])
+                garden += 1
+    print("stromy v zahradách", garden)
 
     # odstraň stromy na silnicích a v domech (zhruba)
     road_cells = set()

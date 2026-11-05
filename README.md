@@ -49,6 +49,10 @@ Výřez mapy (souřadnice) se nastavuje na začátku skriptu.
 - `src/audio.js`: syntetizovaný zvuk motoru a houkačka
 - `src/main.js`: hlavní smyčka, kamera a minimapa
 
+## Dominanty obce
+
+Kostel, obecní úřad, základní škola, mateřská škola, válcový mlýn a Hasoňova chalupa jsou vymodelované podle virtuální prohlídky na [sumice.cz](https://www.sumice.cz/) (fotky se do hry nevkládají, slouží jen jako předloha). Nastavení je v `LANDMARKS` v `tools/build_data.py` a `STYLE` v `src/world.js`.
+
 ## Licence dat
 
 Mapová data © přispěvatelé [OpenStreetMap](https://www.openstreetmap.org/copyright) (ODbL).

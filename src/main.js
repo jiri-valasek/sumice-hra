@@ -30,8 +30,8 @@ scene.fog = new THREE.Fog(SKY, 250, 1500);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.3, 4000);
 
-scene.add(new THREE.HemisphereLight('#dff0ff', '#6f7d4a', 1.1));
-const sun = new THREE.DirectionalLight('#fff4dc', 2.0);
+scene.add(new THREE.HemisphereLight('#e6f2ff', '#9aa07a', 1.9));
+const sun = new THREE.DirectionalLight('#fff4dc', 1.9);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
@@ -349,6 +349,16 @@ load().then(() => {
   if (location.search.includes('debug')) {
     window.game = {
       world, map, camera, get active() { return active; }, useVehicle,
+      // pohled kamery z bodu (lat, lon, výška nad terénem) na bod (lat, lon) – pro srovnání s fotkami
+      view(lat, lon, h, lat2, lon2, h2 = 2) {
+        paused = true;
+        const P = (la, lo) => [(lo - map.origin.lon) * 111412.84 * Math.cos(map.origin.lat * Math.PI / 180),
+          -(la - map.origin.lat) * (111132.954 - 559.822 * Math.cos(2 * map.origin.lat * Math.PI / 180))];
+        const [x, z] = P(lat, lon), [x2, z2] = P(lat2, lon2);
+        camera.position.set(x, world.terrain.height(x, z) + h, z);
+        camera.lookAt(x2, world.terrain.height(x2, z2) + h2, z2);
+        renderer.render(scene, camera);
+      },
       // posune simulaci o `sec` sekund s daným ovládáním (pro testy)
       sim(sec, inp = {}) {
         paused = true;
